@@ -79,75 +79,24 @@ local function resolveIcon(id)
     return id -- último recurso: devolver tal cual
 end
 
--- ============================================================================
--- 🕶 CAPA DE SIGILO (reducción de firma). NO cambia ninguna API pública.
--- ----------------------------------------------------------------------------
--- • Nombres de instancias aleatorios por sesión (nada de "KillerHub_Universal").
--- • Parenteo por el mejor método que ofrezca el executor.
--- • Cero rastro en _G (el estado vive en upvalues locales).
--- NOTA HONESTA: esto reduce la firma estática. No hace invisible al script
--- frente a un anticheat con detección por comportamiento.
--- ============================================================================
-local Stealth = {}
-do
-    local charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    local rng = Random.new(tick() % 1 * 1e9 + os.clock() * 1e6)
-    function Stealth.name(len)
-        local n = len or rng:NextInteger(8, 16)
-        local out = table.create(n)
-        for i = 1, n do
-            local idx = rng:NextInteger(1, #charset)
-            out[i] = charset:sub(idx, idx)
-        end
-        return table.concat(out)
-    end
-    function Stealth.displayOrder()
-        return rng:NextInteger(1200, 9800)
-    end
-end
+
 
 -- 🛠 ANTI-CRASH UNIVERSAL INTEGRADO (GetSafeUIParent)
--- Orden de preferencia: gethui() → protect_gui → CoreGui → PlayerGui.
-local UI_PARENT_LEVEL = "playergui" -- "hidden" | "protected" | "coregui" | "playergui"
 local function GetSafeUIParent()
-    local ok, result = pcall(function()
-        if typeof(gethui) == "function" then
-            local hui = gethui()
-            if hui then UI_PARENT_LEVEL = "hidden" return hui end
-        end
+    local success, result = pcall(function()
+        if gethui then return gethui() end
         local coreGui = game:GetService("CoreGui")
-        if coreGui and coreGui.Name then
-            UI_PARENT_LEVEL = "coregui"
-            return coreGui
-        end
+        if coreGui and coreGui.Name then return coreGui end
     end)
-    if ok and result then return result end
-    UI_PARENT_LEVEL = "playergui"
+    if success and result then return result end
     return LocalPlayer:WaitForChild("PlayerGui")
 end
 
 local TargetParent = GetSafeUIParent()
 
--- Protección extra del ScreenGui si el executor la expone (syn / protect_gui).
-local function ProtectGui(gui)
-    pcall(function()
-        local pg = (syn and syn.protect_gui) or protect_gui
-        if typeof(pg) == "function" then
-            pg(gui)
-            if UI_PARENT_LEVEL == "coregui" then UI_PARENT_LEVEL = "protected" end
-        end
-    end)
+if TargetParent:FindFirstChild("KillerHub_Universal") then
+    TargetParent.KillerHub_Universal:Destroy()
 end
-
--- Limpieza de instancias previas: sin nombre fijo, se detectan por atributo.
-pcall(function()
-    for _, child in ipairs(TargetParent:GetChildren()) do
-        if child:IsA("ScreenGui") and (child:GetAttribute("KH_Session") ~= nil or child.Name == "KillerHub_Universal") then
-            child:Destroy()
-        end
-    end
-end)
-
 
 local Themes = {
     ["Obsidian"] = {
@@ -238,14 +187,8 @@ end)
 local DefaultConfig = {
     Volume = 0.5, ToggleKey = "RightControl", SelectedTheme = "Obsidian", SelectedFont = "GothamMedium", MenuAnimEnabled = true, AutoArrangeShortcuts = true,
     GuiWidth = 0.466, GuiHeight = 0.4, UiOpacity = 0.75, ToggleBtnSize = 46,
-    MainFrameX = 0, MainFrameY = 0, BtnX = 15, BtnY = 100,
-    -- 🆕 Claves nuevas (aditivas: los Universal.json antiguos siguen cargando igual)
-    PerformanceMode = "auto",  -- "auto" | "high" | "balanced" | "lite"
-    AutoUIScale = true,        -- escalado automático según resolución / táctil
-    BlurEnabled = true,        -- se ignora en modo lite
-    ActiveProfile = "default"
+    MainFrameX = 0, MainFrameY = 0, BtnX = 15, BtnY = 100
 }
-
 local Config = {}
 local Flags = {}
 local Connections = {}
@@ -255,151 +198,6 @@ local function connect(event, callback)
     table.insert(Connections, conn)
     return conn
 end
-
--- ============================================================================
--- 📱 DETECCIÓN DE DISPOSITIVO + PERFIL DE RENDIMIENTO
--- ----------------------------------------------------------------------------
--- Perfiles:
---   high     → todo activado (blur, gradiente animado, fades escalonados)
---   balanced → sin blur, gradiente a 15 Hz, tweens cortos
---   lite     → sin blur, sin gradiente, tweens casi instantáneos (gama baja)
--- "auto" mide FPS durante los primeros segundos y elige solo.
--- ============================================================================
-local Device = {
-    Touch = false,
-    Desktop = true,
-    ViewportX = 1280,
-    ViewportY = 720,
-}
-pcall(function()
-    Device.Touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
-    Device.Desktop = not Device.Touch
-    local vp = Camera and Camera.ViewportSize
-    if vp then Device.ViewportX, Device.ViewportY = vp.X, vp.Y end
-end)
-
-local PerfProfile = "high"
-local PerfSpec = {
-    high     = { blur = true,  gradient = true,  gradientHz = 30, tweenScale = 1.00, stagger = true,  shadows = true  },
-    balanced = { blur = false, gradient = true,  gradientHz = 15, tweenScale = 0.60, stagger = false, shadows = true  },
-    lite     = { blur = false, gradient = false, gradientHz = 0,  tweenScale = 0.25, stagger = false, shadows = false },
-}
-local Perf = PerfSpec.high
--- Forward declaration: lo define la sección de API pública más abajo.
-local KillerHub_SetPerf
--- Flag de doble-init de la capa v1.3 (antes vivía en _G, ahora es local).
-local _v13Applied = false
-
-
-
-
-local function _applyPerfProfile(name)
-    if not PerfSpec[name] then name = "high" end
-    PerfProfile = name
-    Perf = PerfSpec[name]
-end
-
--- Heurística inicial: pantallas pequeñas / táctiles arrancan en "balanced".
-local function _guessProfile()
-    if Device.Touch then
-        if Device.ViewportX <= 900 then return "lite" end
-        return "balanced"
-    end
-    if Device.ViewportX <= 1280 then return "balanced" end
-    return "high"
-end
-_applyPerfProfile(_guessProfile())
-
--- ============================================================================
--- 🎞 GESTOR CENTRAL DE TWEENS
--- Cancela el tween anterior del mismo objeto (evita acumulación al spamear
--- toggles) y escala la duración según el perfil de rendimiento.
--- ============================================================================
-local TweenMgr = {}
-do
-    local active = setmetatable({}, { __mode = "k" })
-
-    function TweenMgr.duration(t)
-        return math.max(0, (t or 0.15) * Perf.tweenScale)
-    end
-
-    function TweenMgr.to(inst, props, t, style, dir)
-        if not inst or typeof(inst) ~= "Instance" then return nil end
-        local prev = active[inst]
-        if prev then pcall(function() prev:Cancel() end) end
-        local dur = TweenMgr.duration(t)
-        if dur <= 0.02 then
-            -- Modo lite: aplicar directo, sin coste de tween.
-            for k, v in pairs(props) do pcall(function() inst[k] = v end) end
-            active[inst] = nil
-            return nil
-        end
-        local tw = TweenService:Create(
-            inst,
-            TweenInfo.new(dur, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),
-            props
-        )
-        active[inst] = tw
-        tw.Completed:Once(function()
-            if active[inst] == tw then active[inst] = nil end
-        end)
-        tw:Play()
-        return tw
-    end
-
-    function TweenMgr.cancel(inst)
-        local prev = active[inst]
-        if prev then pcall(function() prev:Cancel() end) active[inst] = nil end
-    end
-end
-
--- ============================================================================
--- ⏱ SCHEDULER ÚNICO
--- Una sola conexión Heartbeat para todas las tareas periódicas de la UI.
--- Cada tarea declara su intervalo y si requiere el menú abierto.
--- ============================================================================
-local Scheduler = {}
-do
-    local tasks = {}
-    local nextId = 0
-    local conn
-
-    local function tick(dt)
-        for id, t in pairs(tasks) do
-            t.acc = t.acc + dt
-            if t.acc >= t.interval then
-                local elapsed = t.acc
-                t.acc = 0
-                local ok, err = pcall(t.fn, elapsed)
-                if not ok then
-                    warn("[KillerHub] Scheduler task error: " .. tostring(err))
-                    tasks[id] = nil
-                end
-            end
-        end
-    end
-
-    function Scheduler.add(interval, fn)
-        nextId = nextId + 1
-        local id = nextId
-        tasks[id] = { interval = interval or 0, fn = fn, acc = 0 }
-        if not conn then
-            conn = RunService.Heartbeat:Connect(tick)
-            table.insert(Connections, conn)
-        end
-        return id
-    end
-
-    function Scheduler.remove(id)
-        tasks[id] = nil
-    end
-
-    function Scheduler.setInterval(id, interval)
-        if tasks[id] then tasks[id].interval = interval end
-    end
-end
-
-
 
 local function copyTable(target, source)
     for k, v in pairs(source) do
@@ -474,22 +272,9 @@ local function create(instanceType, properties, parent)
        and properties.TextStrokeTransparency == nil then
         pcall(function() obj.TextStrokeTransparency = 1 end)
     end
-    -- 📱 Ajustes automáticos para pantallas táctiles: barras de scroll gruesas
-    -- (agarrables con el dedo) y scroll vertical con inercia. No cambia nada
-    -- en PC ni requiere tocar el código que llama a create().
-    if instanceType == "ScrollingFrame" and Device.Touch then
-        pcall(function()
-            if properties.ScrollBarThickness == nil or obj.ScrollBarThickness < 6 then
-                obj.ScrollBarThickness = 6
-            end
-            obj.ScrollingDirection = Enum.ScrollingDirection.Y
-            obj.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
-        end)
-    end
     if parent then obj.Parent = parent end
     return obj
 end
-
 
 -- 🛠 UTILERÍAS EXTRA DE SEGURIDAD Y MENÚ
 local function getSafeColor(flagName, defaultColor)
@@ -503,54 +288,26 @@ local function getSafeColor(flagName, defaultColor)
     return defaultColor
 end
 
--- 🚀 Cacheado: antes esta función subía el árbol completo (while parent) en
--- CADA input de slider / apertura de dropdown. Ahora el ScrollingFrame padre
--- se resuelve una sola vez por elemento y se guarda en una tabla débil.
-local _scrollParentCache = setmetatable({}, { __mode = "k" })
-local function _findScrollParent(element)
-    local cached = _scrollParentCache[element]
-    if cached and cached.Parent then return cached end
+local function setTabScrolling(element, enabled)
     local parent = element.Parent
     while parent do
         if parent:IsA("ScrollingFrame") and parent.Name ~= "SidebarTabsContainer" then
-            _scrollParentCache[element] = parent
-            return parent
+            parent.ScrollingEnabled = enabled
+            break
         end
         parent = parent.Parent
     end
-    return nil
 end
 
-local function setTabScrolling(element, enabled)
-    local sf = _findScrollParent(element)
-    if sf then sf.ScrollingEnabled = enabled end
-end
-
-
 -- ============================================================================
--- 🖥 INTERFAZ PRINCIPAL
--- Se construye con Enabled = false para que el motor no renderice ni haga
--- layout de ~200 instancias mientras se crean (arranque mucho más rápido
--- en teléfonos de gama baja). Se activa al final del archivo.
+-- 🖥 INTERFAZ CON CANVASGROUP DE ALTO RENDIMIENTO
 -- ============================================================================
-local SESSION_ID = Stealth.name(10)
-local ScreenGui = create("ScreenGui", {
-    Name = Stealth.name(),
-    Enabled = false,
-    IgnoreGuiInset = false,
-    ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets,
-    ResetOnSpawn = false,
-    DisplayOrder = Stealth.displayOrder(),
-    ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-}, TargetParent)
-pcall(function() ScreenGui:SetAttribute("KH_Session", SESSION_ID) end)
-ProtectGui(ScreenGui)
-
--- Referencia interna al ScreenGui (antes vivía en _G, lo que dejaba un rastro
--- trivial de detectar). Los subsistemas la reciben por upvalue.
-local KH_ScreenGui = ScreenGui
-local function GetHubScreenGui() return KH_ScreenGui end
-
+local ScreenGui = create("ScreenGui", {Name = "KillerHub_Universal", IgnoreGuiInset = false, ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets, ResetOnSpawn = false, DisplayOrder = 999999, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, TargetParent)
+-- 🌐 Ref global al ScreenGui para que subsistemas (notificaciones v1.3) lo
+-- encuentren incluso cuando gethui() lo parenta a un contenedor no estándar
+-- (CoreGui protegido en algunos executors). Sin esto las notificaciones no
+-- aparecían en clientes donde findNotifContainer() sólo miraba CoreGui/PlayerGui.
+_G.__KillerHub_ScreenGui__ = ScreenGui
 
 local function playUISound()
     if not Config.Volume or Config.Volume <= 0 then return end
@@ -573,61 +330,28 @@ local BordeGradient = create("UIGradient", {
     }), Rotation = 45
 }, MainStroke)
 
--- 🌀 Rotación del gradiente del borde. Ahora vive dentro del Scheduler único
--- (una sola conexión Heartbeat para toda la librería) y se apaga por completo
--- en el perfil "lite": en gama baja escribir UIGradient.Rotation cada frame es
--- de lo más caro que hace la UI.
+-- 🌀 Rotacion del gradiente del borde: solo gasta GPU si el menu esta abierto
+-- Y visible. Al cerrarlo, el RenderStepped simplemente hace early-return, sin
+-- tocar propiedades ni disparar re-layouts.
 local menuFocused = true
-local _gradTaskId
-local function _refreshGradientTask()
-    if _gradTaskId then Scheduler.remove(_gradTaskId) _gradTaskId = nil end
-    if not Perf.gradient or Perf.gradientHz <= 0 then return end
-    _gradTaskId = Scheduler.add(1 / Perf.gradientHz, function(elapsed)
-        if not (BordeGradient and MainFrame.Visible and menuFocused) then return end
-        BordeGradient.Rotation = (BordeGradient.Rotation + (15 * elapsed)) % 360
-    end)
-end
-_refreshGradientTask()
-
--- ============================================================================
--- 📐 TAMAÑO RESPONSIVE (antes eran píxeles absolutos: en un teléfono 720p la
--- ventana se salía de la pantalla o quedaba desproporcionada).
--- Ahora el tamaño base se escala por resolución + factor táctil y SIEMPRE se
--- recorta para caber dentro del viewport, respetando el safe area.
--- ============================================================================
-local function _viewport()
-    local vp = Camera and Camera.ViewportSize
-    if not vp or vp.X < 1 then return Vector2.new(1280, 720) end
-    return vp
-end
-
-local function _uiScaleFactor()
-    if Config.AutoUIScale == false then return 1 end
-    local vp = _viewport()
-    local f = math.clamp(vp.X / 1280, 0.78, 1.25)
-    if Device.Touch then
-        -- En táctil todo debe ser más grande en proporción: dedos, no cursor.
-        f = math.clamp(f * 1.18, 0.85, 1.4)
-    end
-    return f
-end
-
-local function _computeMenuSize()
-    local vp = _viewport()
-    local f = _uiScaleFactor()
-    local w = math.floor((430 + ((Config.GuiWidth or 0.466) * 280)) * f)
-    local h = math.floor((280 + ((Config.GuiHeight or 0.4) * 230)) * f)
-    w = math.clamp(w, 300, math.max(300, math.floor(vp.X - 24)))
-    h = math.clamp(h, 220, math.max(220, math.floor(vp.Y - 24)))
-    return UDim2.new(0, w, 0, h)
-end
+-- Throttle a ~30Hz en Heartbeat: mantiene la animacion suave del borde
+-- pero reduce a la mitad los writes a UIGradient.Rotation (menos trabajo
+-- de layout/GPU en moviles, menos calor y menos caidas de FPS).
+local _gradAccum = 0
+local gradientRotationConn = RunService.Heartbeat:Connect(function(dt)
+    if not (BordeGradient and MainFrame.Visible and menuFocused) then return end
+    _gradAccum = _gradAccum + dt
+    if _gradAccum < 1/30 then return end
+    BordeGradient.Rotation = (BordeGradient.Rotation + (15 * _gradAccum)) % 360
+    _gradAccum = 0
+end)
+table.insert(Connections, gradientRotationConn)
 
 local function updateGuiSize()
     if MainFrame.Visible then
-        MainFrame.Size = _computeMenuSize()
+        MainFrame.Size = UDim2.new(0, math.floor(430 + ((Config.GuiWidth or 0.466) * 280)), 0, math.floor(280 + ((Config.GuiHeight or 0.4) * 230)))
     end
 end
-
 
 local Topbar = create("Frame", {Size = UDim2.new(1, 0, 0, 45), BackgroundColor3 = Color3.fromRGB(4, 4, 5), BorderSizePixel = 0, Active = true, ClipsDescendants = true}, MainFrame)
 create("UICorner", {CornerRadius = UDim.new(0, 12)}, Topbar)
@@ -636,48 +360,27 @@ local Title = create("TextLabel", {Size = UDim2.new(0, 250, 1, 0), Position = UD
 local DecorLine = create("Frame", {Size = UDim2.new(0, 60, 0, 2.5), Position = UDim2.new(0, 18, 1, -2), BackgroundColor3 = CurrentTheme.ACCENT, BorderSizePixel = 0}, Topbar)
 local PerformanceLabel = create("TextLabel", {Size = UDim2.new(0, 160, 1, 0), Position = UDim2.new(1, -15, 0, 0), AnchorPoint = Vector2.new(1, 0), BackgroundTransparency = 1, Text = "FPS: -- | PING: --", TextColor3 = CurrentTheme.TEXT_MUTED, TextXAlignment = Enum.TextXAlignment.Right, Font = Enum.Font.GothamMedium, TextSize = 11}, Topbar)
 
--- 📊 FPS / PING: un contador barato por frame + refresco de texto 1 vez por
--- segundo, y SOLO si el menú está visible (antes se formateaba y escribía el
--- TextLabel aunque el hub estuviera cerrado).
+local fpsTimer = 0
 local frameCounter = 0
-local lastFps = 60
-local _fpsSamples, _fpsSampleCount = 0, 0
-
-Scheduler.add(0, function()
+local perfConn = RunService.Heartbeat:Connect(function(dt)
+    fpsTimer = fpsTimer + dt
     frameCounter = frameCounter + 1
-end)
-
-Scheduler.add(1, function()
-    lastFps = frameCounter
-    frameCounter = 0
-
-    -- Auto-perfil: promedia los primeros 5 segundos y ajusta si hace falta.
-    if _fpsSampleCount < 5 then
-        _fpsSamples = _fpsSamples + lastFps
-        _fpsSampleCount = _fpsSampleCount + 1
-        if _fpsSampleCount == 5 and (Config.PerformanceMode or "auto") == "auto" then
-            local avg = _fpsSamples / 5
-            local target = "high"
-            if avg < 25 then target = "lite"
-            elseif avg < 45 then target = "balanced"
-            elseif Device.Touch then target = "balanced" end
-            if target ~= PerfProfile and KillerHub_SetPerf then KillerHub_SetPerf(target, true) end
-        end
+    if fpsTimer >= 1 then
+        local currentFps = frameCounter
+        frameCounter = 0
+        fpsTimer = 0
+        local ping = 0
+        pcall(function()
+            if Stats:FindFirstChild("Network") and Stats.Network:FindFirstChild("ServerToClientPing") then
+                ping = math.floor(Stats.Network.ServerToClientPing:GetValue())
+            else
+                ping = math.floor(LocalPlayer:GetNetworkPing() * 1000)
+            end
+        end)
+        PerformanceLabel.Text = string.format("FPS: %d | PING: %dms", currentFps, ping)
     end
-
-    if not (MainFrame.Visible and ScreenGui.Enabled) then return end
-    local ping = 0
-    pcall(function()
-        if Stats:FindFirstChild("Network") and Stats.Network:FindFirstChild("ServerToClientPing") then
-            ping = math.floor(Stats.Network.ServerToClientPing:GetValue())
-        else
-            ping = math.floor(LocalPlayer:GetNetworkPing() * 1000)
-        end
-    end)
-    PerformanceLabel.Text = string.format("FPS: %d | PING: %dms", lastFps, ping)
 end)
-
-
+table.insert(Connections, perfConn)
 
 -- 🛡️ ARRASTRE SIN ERRORES MULTI-TOUCH EN MÓVILES
 local function makeDraggable(clickObject, dragObject)
@@ -783,7 +486,7 @@ local function updateButtonSize()
     OpenCloseBtn.Size = UDim2.new(0, s, 0, s)
 end
 
-MainFrame.Size = _computeMenuSize()
+MainFrame.Size = UDim2.new(0, math.floor(430 + ((Config.GuiWidth or 0.466) * 280)), 0, math.floor(280 + ((Config.GuiHeight or 0.4) * 230)))
 updateUiOpacity()
 updateButtonSize()
 
@@ -796,28 +499,16 @@ updateButtonSize()
 -- escalonado que produce una sensacion mas premium sin costo de GPU.
 local BLUR_MAX = 14
 local menuBlur -- BlurEffect que solo existe mientras el menu esta abierto
--- ⚠️ El BlurEffect es, con diferencia, lo más caro de toda la UI en GPUs
--- móviles (Mali/Adreno antiguas). Se desactiva por perfil de rendimiento y
--- se puede apagar manualmente desde Settings.
-local function _blurAllowed()
-    return Perf.blur and Config.BlurEnabled ~= false
-end
 local function _ensureBlur()
-    if not _blurAllowed() then return nil end
     if menuBlur and menuBlur.Parent then return menuBlur end
     local ok, lighting = pcall(function() return game:GetService("Lighting") end)
     if not ok or not lighting then return nil end
     menuBlur = Instance.new("BlurEffect")
-    menuBlur.Name = Stealth.name()
+    menuBlur.Name = "KillerHub_MenuBlur"
     menuBlur.Size = 0
     menuBlur.Parent = lighting
     return menuBlur
 end
-local function _killBlur()
-    if menuBlur and menuBlur.Parent then pcall(function() menuBlur:Destroy() end) end
-    menuBlur = nil
-end
-
 
 -- Snapshots de opacidad "en reposo" de cada capa del menu, calculadas al abrir
 local function _computeLayerOpacities()
@@ -830,12 +521,8 @@ local function _computeLayerOpacities()
 end
 
 local function _tween(inst, props, t, style, dir)
-    -- Duración escalada por el perfil de rendimiento (en "lite" las
-    -- transiciones son casi instantáneas: menos trabajo por frame).
-    local dur = math.max(0.03, (t or 0.15) * Perf.tweenScale)
-    return TweenService:Create(inst, TweenInfo.new(dur, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
+    return TweenService:Create(inst, TweenInfo.new(t, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
 end
-
 
 local menuVisible = true
 -- 🎬 Animación premium: fade + scale suave desde el centro con easing Quint.
@@ -847,12 +534,8 @@ _menuScale.Scale = 1
 _menuScale.Parent = MainFrame
 
 local function _animEnabled()
-    -- En perfil "lite" (gama baja) el menú aparece al instante: el fade
-    -- escalonado obliga a repintar todas las capas durante ~0.3 s.
-    if not Perf.stagger and PerfProfile == "lite" then return false end
     return Config.MenuAnimEnabled ~= false
 end
-
 
 local function setMenuVisibility(visible)
     menuVisible = visible
@@ -1176,81 +859,6 @@ function KillerHub:RegisterIcon(name, id)
     IconLibrary[name] = tostring(id)
 end
 function KillerHub:GetIcon(name) return resolveIcon(name) end
-
--- ============================================================================
--- 🆕 API ADITIVA (nada de esto rompe scripts existentes)
--- ============================================================================
-
--- Referencia interna al ScreenGui, sin ensuciar _G.
-KillerHub._ScreenGui = ScreenGui
-KillerHub._GetScreenGui = GetHubScreenGui
-
--- 📱 Información del dispositivo detectada al arrancar.
-KillerHub.Device = Device
-
--- ⚙️ Perfil de rendimiento -----------------------------------------------------
--- KillerHub:SetPerformanceMode("auto" | "high" | "balanced" | "lite")
-KillerHub_SetPerf = function(mode, silent)
-    mode = tostring(mode or "auto"):lower()
-    local resolved = mode
-    if mode == "auto" then resolved = _guessProfile() end
-    if not PerfSpec[resolved] then resolved = "high" end
-
-    _applyPerfProfile(resolved)
-    Config.PerformanceMode = mode
-    saveConfig()
-
-    -- Reaplicar lo que depende del perfil
-    _refreshGradientTask()
-    if not _blurAllowed() then _killBlur() end
-    if not Perf.gradient and BordeGradient then BordeGradient.Rotation = 45 end
-
-    if not silent and KillerHub.NotifyInfo then
-        pcall(function()
-            KillerHub:NotifyInfo("Rendimiento", "Perfil: " .. resolved:upper(), 2)
-        end)
-    end
-    return resolved
-end
-
-function KillerHub:SetPerformanceMode(mode)
-    return KillerHub_SetPerf(mode, false)
-end
-
-function KillerHub:GetPerformanceMode()
-    return PerfProfile, Config.PerformanceMode
-end
-
--- 🎨 Temas propios -------------------------------------------------------------
--- KillerHub:RegisterTheme("MiTema", { BG_MAIN=..., ACCENT=..., ... })
--- Las claves que falten se heredan de Obsidian, así nunca queda un tema roto.
-function KillerHub:RegisterTheme(name, palette)
-    if type(name) ~= "string" or type(palette) ~= "table" then return false end
-    local base = Themes["Obsidian"]
-    local merged = {}
-    for k, v in pairs(base) do merged[k] = v end
-    for k, v in pairs(palette) do
-        if typeof(v) == "Color3" then merged[k] = v end
-    end
-    Themes[name] = merged
-    return true
-end
-
-function KillerHub:GetThemes()
-    local list = {}
-    for k in pairs(Themes) do table.insert(list, k) end
-    table.sort(list)
-    return list
-end
-
--- 🧰 Utilidades de tween expuestas (para módulos externos que quieran respetar
--- el perfil de rendimiento del usuario en vez de animar a lo bruto).
-KillerHub.Tween = {
-    to = function(inst, props, t, style, dir) return TweenMgr.to(inst, props, t, style, dir) end,
-    cancel = function(inst) return TweenMgr.cancel(inst) end,
-}
-
-
 
 
 function KillerHub:SetFont(fontName)
@@ -2842,36 +2450,17 @@ function KillerHub:CreateTab(name, iconId, opts)
     -- opts.parent (Instance) permite anidar la pestaña dentro de un grupo colapsable (ver CreateTabGroup)
     local parentContainer = (opts and opts.parent) or SidebarTabsContainer
 
-    -- ⚡ LAZY MOUNT: el frame de la pestaña se crea SIN padre. Sus elementos se
-    -- construyen igual (la API no cambia), pero al no estar en el DataModel el
-    -- motor no hace layout ni render de ellos. Se engancha a ContentContainer
-    -- la primera vez que se abre la pestaña. En gama baja esto elimina casi
-    -- todo el tirón de arranque cuando hay muchas pestañas.
-    local frame = create("ScrollingFrame", {Name = name .. "Frame", Size = UDim2.new(1, -14, 1, -13), Position = UDim2.new(0, 7, 0, 6), BackgroundColor3 = CurrentTheme.BG_MAIN, BackgroundTransparency = 0.5, Visible = false, ScrollBarThickness = 2, ScrollBarImageColor3 = CurrentTheme.ACCENT})
+    local frame = create("ScrollingFrame", {Name = name .. "Frame", Size = UDim2.new(1, -14, 1, -13), Position = UDim2.new(0, 7, 0, 6), BackgroundColor3 = CurrentTheme.BG_MAIN, BackgroundTransparency = 0.5, Visible = false, ScrollBarThickness = 2, ScrollBarImageColor3 = CurrentTheme.ACCENT}, ContentContainer)
     create("UICorner", {CornerRadius = UDim.new(0, 8)}, frame)
     local stroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, frame)
-
+    
     local layout = create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6)}, frame)
     create("UIPadding", {PaddingTop = UDim.new(0, 8), PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8)}, frame)
-
-    local sizeChangedConn = layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        frame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 20)
+    
+    local sizeChangedConn = layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() 
+        frame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 20) 
     end)
     table.insert(Connections, sizeChangedConn)
-
-    local mounted = false
-    local function mountFrame()
-        if mounted then return end
-        mounted = true
-        frame.Parent = ContentContainer
-        -- Un frame de gracia para que el UIListLayout mida y el canvas quede bien.
-        task.defer(function()
-            if frame.Parent then
-                frame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 20)
-            end
-        end)
-    end
-
 
     local btn = create("TextButton", {Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = CurrentTheme.ACCENT, BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, (name == "Settings" and SettingsContainer or parentContainer))
     create("UICorner", {CornerRadius = UDim.new(0, 6)}, btn)
@@ -2891,18 +2480,12 @@ function KillerHub:CreateTab(name, iconId, opts)
     KillerHub.Frames[name] = frame KillerHub.Buttons[name] = btn
     -- Se guarda la referencia una sola vez (en vez de FindFirstChild en cada click de pestaña):
     -- más rápido y sin buscar en el árbol de instancias cada vez que se cambia de pestaña
-    KillerHub.TabRegistry[name] = {Frame = frame, Btn = btn, Label = btnLabel, Icon = iconImg, Line = line, Mount = mountFrame}
-    -- El frame vive fuera del árbol hasta abrirse: lo registramos para que
-    -- Unload() lo destruya igualmente y no quede basura en memoria.
-    KillerHub:AddTask(frame)
+    KillerHub.TabRegistry[name] = {Frame = frame, Btn = btn, Label = btnLabel, Icon = iconImg, Line = line}
 
     local function selectTab()
         for tName, reg in pairs(KillerHub.TabRegistry) do
             local isSel = (tName == name)
-            if isSel and reg.Mount then reg.Mount() end
-            -- Solo tocamos Visible si el frame ya está montado (los no montados
-            -- ya son invisibles por definición: no están en el DataModel).
-            if reg.Frame.Parent then reg.Frame.Visible = isSel end
+            reg.Frame.Visible = isSel
             reg.Label.TextColor3 = isSel and CurrentTheme.ACCENT or CurrentTheme.TEXT_MUTED
             reg.Line.BackgroundTransparency = isSel and 0 or 1
             if reg.Icon then reg.Icon.ImageColor3 = isSel and CurrentTheme.ACCENT or CurrentTheme.TEXT_MUTED end
@@ -2910,12 +2493,13 @@ function KillerHub:CreateTab(name, iconId, opts)
             -- seleccionada sin verse pesado ni tapar el texto
             if reg.Btn then
                 reg.Btn.BackgroundColor3 = CurrentTheme.ACCENT
-                TweenMgr.to(reg.Btn, { BackgroundTransparency = isSel and 0.82 or 1 }, 0.18)
+                TweenService:Create(reg.Btn, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                    BackgroundTransparency = isSel and 0.82 or 1
+                }):Play()
             end
         end
         KillerHub.CurrentTab = name
     end
-
     connect(btn.MouseButton1Click, function() if KillerHub.CurrentTab ~= name then selectTab() playUISound() end end)
     if isFirstTab or name == "Settings" then task.spawn(selectTab) end
     
@@ -4097,14 +3681,10 @@ getgenv().KillerHub.Flags = Flags
 --   §11 SafeCallback global, protección doble-init, identifyexecutor con fallback
 -- ============================================================================
 do
-    -- 🕶 Antes esto usaba _G.__KillerHub_v13_Applied__ (una global con el nombre
-    -- del hub = firma trivial de detectar). Ahora el flag vive en un upvalue
-    -- local del propio chunk: mismo comportamiento, cero rastro global.
-    if _v13Applied then
+    if rawget(_G, "__KillerHub_v13_Applied__") then
         warn("[KillerHub] Loaded")
     else
-        _v13Applied = true
-
+        _G.__KillerHub_v13_Applied__ = true
 
         local ok, err = pcall(function()
             -- ------------------------------------------------------------------
@@ -4619,7 +4199,7 @@ do
             function KillerHub:Destroy()
                 pcall(function() KillerHub._WindowMaid:Clean() end)
                 pcall(function() themeSignal:Destroy() end)
-                _v13Applied = nil
+                _G.__KillerHub_v13_Applied__ = nil
                 if typeof(origDestroy) == "function" then
                     pcall(origDestroy, self)
                 end
@@ -4629,7 +4209,7 @@ do
             function KillerHub:Unload()
                 pcall(function() KillerHub._WindowMaid:Clean() end)
                 pcall(function() themeSignal:Destroy() end)
-                _v13Applied = nil
+                _G.__KillerHub_v13_Applied__ = nil
                 if typeof(origUnload) == "function" then
                     pcall(origUnload, self)
                 end
@@ -4647,7 +4227,7 @@ do
         if not ok then
             warn("[KillerHub v1.3] Enhancement layer FALLO al aplicarse: " .. tostring(err))
             warn("[KillerHub v1.3] La librería sigue funcionando con su comportamiento original.")
-            _v13Applied = nil
+            _G.__KillerHub_v13_Applied__ = nil
         end
     end
 end
@@ -4655,17 +4235,5 @@ end
 -- FIN ENHANCEMENT LAYER v1.3
 -- ============================================================================
 
--- ============================================================================
--- 🚦 ARRANQUE FINAL
--- Toda la UI se construyó con ScreenGui.Enabled = false: el motor no renderizó
--- ni midió una sola instancia durante la carga. Aquí se enciende, ya con el
--- layout resuelto, y se aplica el perfil de rendimiento guardado por el usuario.
--- ============================================================================
-do
-    pcall(function()
-        KillerHub_SetPerf(Config.PerformanceMode or "auto", true)
-    end)
-    ScreenGui.Enabled = true
-end
 
 return KillerHub
