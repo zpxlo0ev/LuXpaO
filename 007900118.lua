@@ -185,7 +185,7 @@ pcall(function()
 end)
 
 local DefaultConfig = {
-    Volume = 0.5, ToggleKey = "RightControl", SelectedTheme = "Obsidian", SelectedFont = "GothamMedium", MenuAnimEnabled = true, AutoArrangeShortcuts = true,
+    Volume = 0.5, ToggleKey = "RightControl", SelectedTheme = "Obsidian", SelectedFont = "GothamMedium", MenuAnimEnabled = true, AutoArrangeShortcuts = true, DisableNotifications = false,
     GuiWidth = 0.466, GuiHeight = 0.4, UiOpacity = 0.75, ToggleBtnSize = 46,
     MainFrameX = 0, MainFrameY = 0, BtnX = 15, BtnY = 100
 }
@@ -340,6 +340,8 @@ local menuFocused = true
 local _gradAccum = 0
 local gradientRotationConn = RunService.Heartbeat:Connect(function(dt)
     if not (BordeGradient and MainFrame.Visible and menuFocused) then return end
+    -- Si el usuario apaga las animaciones (gama baja), ni escribimos la rotacion.
+    if Config.MenuAnimEnabled == false then return end
     _gradAccum = _gradAccum + dt
     if _gradAccum < 1/30 then return end
     BordeGradient.Rotation = (BordeGradient.Rotation + (15 * _gradAccum)) % 360
@@ -366,6 +368,13 @@ local perfConn = RunService.Heartbeat:Connect(function(dt)
     fpsTimer = fpsTimer + dt
     frameCounter = frameCounter + 1
     if fpsTimer >= 1 then
+        -- Con el menu cerrado nadie ve la etiqueta: reset y salida antes de
+        -- tocar Stats / string.format (ahorra CPU en telefonos).
+        if not MainFrame.Visible then
+            frameCounter = 0
+            fpsTimer = 0
+            return
+        end
         local currentFps = frameCounter
         frameCounter = 0
         fpsTimer = 0
@@ -699,13 +708,36 @@ local NotifLayout = create("UIListLayout", {
 local MAX_ACTIVE_NOTIFS = 5
 local ActiveNotifs = {}
 
+-- Interruptor global de notificaciones (Settings > "Turn off notifications").
+-- Con el activado no se crea NI un frame: cero instancias, cero tweens.
+local function removeNotifTheme(rec)
+    if rec and rec._ThemeFn then
+        local i = table.find(KillerHub.TargetThemeElements, rec._ThemeFn)
+        if i then table.remove(KillerHub.TargetThemeElements, i) end
+        rec._ThemeFn = nil
+    end
+end
+
+function KillerHub:ClearNotifications()
+    for i = #ActiveNotifs, 1, -1 do
+        local rec = ActiveNotifs[i]
+        removeNotifTheme(rec)
+        if rec and rec.Frame then pcall(function() rec.Frame:Destroy() end) end
+        table.remove(ActiveNotifs, i)
+    end
+end
+
 function KillerHub:Notify(title, text, duration, customColor)
+    if Config.DisableNotifications then return end
     duration = duration or 4
     local accentColor = customColor or CurrentTheme.ACCENT
 
     if #ActiveNotifs >= MAX_ACTIVE_NOTIFS then
         local oldest = table.remove(ActiveNotifs, 1)
-        if oldest and oldest.Parent then pcall(function() oldest:Destroy() end) end
+        -- Antes solo se destruia el frame y su callback de tema seguia vivo en
+        -- TargetThemeElements: fuga de memoria que hacia lento cada cambio de tema.
+        removeNotifTheme(oldest)
+        if oldest and oldest.Frame and oldest.Frame.Parent then pcall(function() oldest.Frame:Destroy() end) end
     end
 
     local NotifFrame = create("Frame", {
@@ -747,24 +779,30 @@ function KillerHub:Notify(title, text, duration, customColor)
         TextYAlignment = Enum.TextYAlignment.Top
     }, NotifFrame)
 
+    local record = {Frame = NotifFrame}
+
     if not customColor then
-        table.insert(KillerHub.TargetThemeElements, function()
+        local themeFn = function()
+            if not NotifFrame.Parent then return end
             NotifFrame.BackgroundColor3 = CurrentTheme.BG_MAIN
             Stroke.Color = CurrentTheme.BORDER
             Line.BackgroundColor3 = CurrentTheme.ACCENT
-        end)
+        end
+        record._ThemeFn = themeFn
+        table.insert(KillerHub.TargetThemeElements, themeFn)
     end
 
-    table.insert(ActiveNotifs, NotifFrame)
+    table.insert(ActiveNotifs, record)
 
     TweenService:Create(NotifFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 46)}):Play()
     
     task.delay(duration, function()
         if not NotifFrame or not NotifFrame.Parent then return end
         local t = TweenService:Create(NotifFrame, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1})
-        t.Completed:Connect(function()
+        t.Completed:Once(function()
             pcall(function() NotifFrame:Destroy() end)
-            local idx = table.find(ActiveNotifs, NotifFrame)
+            removeNotifTheme(record)
+            local idx = table.find(ActiveNotifs, record)
             if idx then table.remove(ActiveNotifs, idx) end
         end)
         t:Play()
@@ -3632,6 +3670,10 @@ SettingsTab:CreateSlider("UiOpacity", "UI Opacity", 0.3, 1, function(v) updateUi
 
 SettingsTab:CreateSection("Menu Controls")
 SettingsTab:CreateToggle("MenuAnimEnabled", "UI Animation", function(v) Config.MenuAnimEnabled = v end)
+SettingsTab:CreateToggle("DisableNotifications", "Turn off notifications", function(v)
+    Config.DisableNotifications = v
+    if v then KillerHub:ClearNotifications() end
+end)
 SettingsTab:CreateToggle("AutoArrangeShortcuts", "Auto-organize Shortcuts", function(v) Config.AutoArrangeShortcuts = v end)
 SettingsTab:CreateKeybind("ToggleKey", "Close/Open Menu", Enum.KeyCode.RightControl, function(key)
     print("Se presionó la tecla: " .. tostring(key))
