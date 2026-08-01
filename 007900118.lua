@@ -4171,6 +4171,11 @@ do
 
             local origNotify = KillerHub.Notify
             function KillerHub:Notify(title, text, duration, customColorOrKind)
+                -- 🩹 FIX: este Notify (v1.3) reemplaza por completo al original y
+                -- nunca respetaba Config.DisableNotifications, por lo que el
+                -- toggle "Turn off notifications" no ocultaba nada. Cortamos
+                -- aquí mismo, antes de tocar la cola o crear cualquier Instance.
+                if Config.DisableNotifications then return end
                 local kind = "info"
                 local color = nil
                 if typeof(customColorOrKind) == "Color3" then
@@ -4193,6 +4198,25 @@ do
                     if typeof(origNotify) == "function" then
                         pcall(origNotify, self, title, text, duration, color)
                     end
+                end
+            end
+
+            -- 🩹 FIX (complemento): al activar "Turn off notifications" se llama a
+            -- KillerHub:ClearNotifications(), pero esa función original solo
+            -- vaciaba ActiveNotifs (tabla del sistema viejo, ya reemplazado y
+            -- por ende siempre vacía). Las notificaciones visibles/en cola del
+            -- sistema v1.3 (NotifActive/NotifQueue) nunca se tocaban y se
+            -- quedaban pegadas en pantalla. La extendemos aquí sin romper la API.
+            local origClearNotifications = KillerHub.ClearNotifications
+            function KillerHub:ClearNotifications()
+                NotifQueue = {}
+                for i = #NotifActive, 1, -1 do
+                    local frame = NotifActive[i]
+                    if frame then pcall(function() frame:Destroy() end) end
+                    table.remove(NotifActive, i)
+                end
+                if typeof(origClearNotifications) == "function" then
+                    pcall(origClearNotifications, self)
                 end
             end
 
@@ -4257,11 +4281,11 @@ do
                 end
             end
 
-            -- Refresh de tokens en cada cambio de tema (por si SetTheme externo)
-            local reTokens = RS.Heartbeat:Connect(Utils.Throttle(function()
-                -- barato: solo redetectar si cambia la referencia del tema global
-            end, 1))
-            KillerHub._WindowMaid:Add(reTokens)
+            -- ⚡ OPTIMIZACIÓN: aquí existía una conexión a Heartbeat que se
+            -- ejecutaba en CADA frame pero tenía el cuerpo vacío (no hacía
+            -- absolutamente nada, ni redetectaba tema ni actualizaba tokens).
+            -- Era puro overhead — una llamada de función + chequeo de throttle
+            -- 60 veces por segundo sin ningún efecto. Se eliminó por completo.
 
             warn(("[KillerHub] Enhancement layer aplicada. Executor: %s"):format(KillerHub.Executor))
         end)
