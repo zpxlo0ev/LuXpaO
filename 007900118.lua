@@ -1,5 +1,48 @@
 -- ============================================================================
--- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.3.5)
+-- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.5.1)
+-- Changelog V5.5.1:
+--   • Fix: al apagar "Widgets" (Modify) los bordes de los widgets y del panel
+--     de Shortcuts quedaban BLANCOS. El stroke usaba base blanca porque el
+--     UIGradient la multiplica; sin gradiente se veía el blanco crudo. Ahora
+--     el color base se decide en un solo lugar (_paintInnerStroke): blanco con
+--     la animación ON, color BORDER del tema con la animación OFF.
+--   • Fix: repaintTagged pisaba el color de los strokes animados al cambiar de
+--     tema (bordes apagados o blancos según el orden). Ahora respeta el estado.
+--   • Fix: el grosor forzado a 1.4px ya no queda pegado: se guarda el grosor
+--     original (BaseThickness) y se restaura cuando la animación está OFF.
+--   • Perf: si no hay nada animable en pantalla (hub cerrado/sin foco, botón
+--     flotante oculto y sin shortcuts) el Heartbeat sale de inmediato, sin
+--     avanzar el ángulo ni recorrer listas. Cero costo con el hub cerrado.
+-- Changelog V5.5.0:
+--   • Fix: "Reset style" ya mueve visualmente los sliders y toggles de la
+--     página Modify (antes solo cambiaba el valor interno, así que parecía que
+--     no hacía nada). Ahora usa KillerHub.Elements[flag]:Set(...) y repinta una
+--     sola vez al final en vez de una por valor.
+--   • Perf: los bordes internos de widgets que están en pestañas/páginas
+--     OCULTAS ya no se repintan cada frame. El costo por frame depende solo de
+--     la página abierta, no del total de widgets del hub (menos tirones/FPS
+--     inestables en hubs grandes).
+-- Changelog V5.4.9:
+--   • Fix: los bordes animados desaparecían en las últimas pestañas creadas
+--     (Troll, Modify, etc.) porque el registro de bordes internos se topaba con
+--     el límite de 160. Ahora el límite es 700.
+--   • Nuevo toggle real "Shortcut buttons" (Settings ▸ Modify ▸ Where): apaga /
+--     enciende la animación del borde de los botones flotantes de shortcuts.
+--     Antes "Float button" solo afectaba al icono de abrir/cerrar.
+--   • Nuevo TabMethods:CreateHint(text) — línea corta y apagada bajo cada
+--     opción; todo Settings ahora explica en inglés simple para qué sirve.
+-- Changelog V5.4.6:
+--   • El realce del borde animado (y de la ola de texto ON) ya no se va a un
+--     tono claro/lechoso: se conserva la saturación del tema y el brillo solo
+--     sube lo justo. Blood se ve rojo sangre, no rojo chicle.
+--   • Nueva base _deepen(): el color GLOW del tema se profundiza (+sat, -valor)
+--     antes de construir el degradado, así aplica a TODOS los temas y a todos
+--     los bordes (ventana, widgets internos, shortcuts) desde un solo lugar.
+--   • Segunda pasada: base aún más oscura (v*0.58) y más negro en el degradado
+--     (0.98 / 0.80 / 0.42), para que el cometa resalte contra negro sin verse
+--     brillante ni lavado.
+--   • El botón flotante que abre/cierra el GUI ahora usa el mismo borde animado
+--     (2.4px + degradado giratorio) en vez de un stroke fijo casi invisible.
 -- Changelog V5.3.1:
 --   • Fix: borde/stroke de la opción seleccionada en Dropdown/MultiDropdown ya
 --     no se corta del lado izquierdo (UIPadding interno en la lista).
@@ -53,6 +96,21 @@
 --     los CreateToggle/CreateSlider/etc. de una misma pestaña en varios
 --     bloques de código sin amontonarlos todos juntos (ver comentario junto
 --     a la función, y la respuesta en el chat con el patrón completo).
+-- Changelog V5.4.5:
+--   • Adiós al blanco puro en los bordes animados: el núcleo del "cometa" y
+--     la cresta de la ola de texto ya no van a Color3.new(1,1,1). Ahora se
+--     realza el BRILLO en HSV conservando el TONO del tema (mismo rojo /
+--     morado / verde, solo encendido), así que ningún tema de color se ve
+--     lechoso. Classic Dark, cuyo acento ya es casi blanco, queda igual que
+--     antes sin necesidad de un caso especial.
+--   • La línea decorativa del título también deja el blanco fijo y usa el
+--     acento del tema realzado.
+--   • Los UIStroke siguen en blanco NEUTRO a propósito: es solo la base sobre
+--     la que el UIGradient multiplica. Si se pinta oscuro, el degradado se
+--     apaga y el borde vuelve a no verse. El color visible lo pone 100% el
+--     degradado, que ya no contiene blanco.
+--   • Costo en runtime: cero. La conversión HSV ocurre solo al construir la
+--     ColorSequence (arranque y cambio de tema), no por frame.
 -- ============================================================================
 
 local Players = game:GetService("Players")
@@ -250,8 +308,20 @@ end)
 local DefaultConfig = {
     Volume = 0.5, ToggleKey = "RightControl", SelectedTheme = "Obsidian", SelectedFont = "GothamMedium", MenuAnimEnabled = true, AutoArrangeShortcuts = true, DisableNotifications = false,
     GuiWidth = 0.466, GuiHeight = 0.4, UiOpacity = 0.75, ToggleBtnSize = 46,
-    MainFrameX = 0, MainFrameY = 0, BtnX = 15, BtnY = 100, BackgroundEnabled = false
+    MainFrameX = 0, MainFrameY = 0, BtnX = 15, BtnY = 100, BackgroundEnabled = false,
+    -- ✨ V5.4.8 · "Modify": todo el look del borde animado es configurable en vivo
+    AnimSpeed = 185,        -- grados por segundo del cometa
+    AnimGlow = 0.30,        -- cuánto se enciende el núcleo (0 = apagado, 1 = máximo)
+    AnimDepth = 0.58,       -- qué tan oscura es la base (menor = más oscuro)
+    AnimWidth = 3,          -- grosor del borde de la ventana
+    WaveSpeed = 0.85,       -- velocidad de la ola del texto ON
+    WindowBorder = true,    -- animación del borde de la ventana
+    InnerBorders = true,    -- animación de los bordes internos (widgets)
+    FloatBorder = true,     -- animación del borde del botón flotante (abrir/cerrar)
+    FloatWidth = 2.4,       -- grosor de ese borde
+    ShortcutBorder = true   -- animación del borde de los shortcuts flotantes
 }
+
 local Config = {}
 local Flags = {}
 local Connections = {}
@@ -379,8 +449,9 @@ end
 -- viviendo en UNA sola conexión Heartbeat (una escritura de Rotation por
 -- gradiente, sin Instances ni tweens por frame) y se refresca a ~30 Hz.
 local InnerBorderGradients = {}
-local INNER_BORDER_LIMIT = 160
+local INNER_BORDER_LIMIT = 700 -- V5.4.9: antes 160 -> las últimas pestañas (Troll, Modify...) se quedaban sin borde animado
 local _registerInnerStroke = nil -- se asigna cuando _borderSeq ya existe
+local _shortcutBorderColor = nil -- forward: se asigna junto a getShortcutBorder()
 
 local function create(instanceType, properties, parent)
     local obj = Instance.new(instanceType)
@@ -659,52 +730,126 @@ local MainFrame = create("Frame", {Name = "MainFrame", BackgroundColor3 = Curren
 -- shortcuts (chiquitos) se notaba muy poco porque el tramo iluminado ocupaba
 -- una porción minúscula del perímetro total. El glow externo ahora también
 -- gira con SU propio degradado en vez de quedarse fijo y casi invisible.
-local MainStroke = create("UIStroke", {Thickness = 3, Color = CurrentTheme.BORDER, Transparency = 0, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Enabled = true}, MainFrame)
+local MainStroke = create("UIStroke", {Thickness = 3, Color = Color3.new(1, 1, 1), Transparency = 0, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Enabled = true}, MainFrame)
 create("UICorner", {CornerRadius = UDim.new(0, 16)}, MainFrame)
 -- 🩹 V5.4.3: el halo exterior semitransparente era justo el "borde raro que
 -- sobresale" de la captura: un contorno de 5px al 55% de transparencia que
 -- se salía de la ventana y se veía como un marco fantasma. Se apaga por
 -- completo; el brillo ahora vive DENTRO del propio borde animado.
 local OuterGlow = create("UIStroke", {Thickness = 0, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Enabled = false}, MainFrame)
-local function _hotColor(c) return c:Lerp(Color3.new(1, 1, 1), 0.82) end
 local BLACK = Color3.fromRGB(0, 0, 0)
--- ✨ V5.4.3 — "cometa" del borde: banda MUCHO más larga y más resplandeciente,
--- con la mezcla que pediste (negro → color del tema, p.ej. rojo sangre en
--- Blood → núcleo incandescente → negro). Antes el tramo iluminado ocupaba una
--- porción minúscula del perímetro y casi no se apreciaba.
--- 🔆 V5.4.3: la banda casi no se apreciaba porque el tramo oscuro dominaba el
--- perímetro. Ahora el "cometa" es más largo (arranca a iluminar desde 0.15),
--- el núcleo es casi blanco incandescente y el tramo apagado ya no es negro
--- puro sino el color del tema muy oscurecido: así se ve el recorrido completo.
+-- 🎨 V5.4.5: fuera el blanco puro. Antes el núcleo del cometa era
+-- Color3.new(1,1,1) y el "hot" era un 82% de mezcla hacia blanco: en temas de
+-- color (Blood, Obsidian, Neon...) se veía un destello lechoso que desentonaba.
+-- Ahora subimos el BRILLO en HSV manteniendo el TONO del tema: el mismo rojo /
+-- morado / verde, pero encendido al máximo. En Classic Dark el acento ya es casi
+-- blanco, así que ese tema conserva su look de siempre sin ningún caso especial.
+-- 🎨 V5.4.6: el realce era demasiado luminoso (v * 1.35 + 0.30 y la saturación
+-- bajaba hasta 0.70), así que Blood terminaba en un rojo "chicle" y no en rojo
+-- sangre. Ahora la saturación se CONSERVA (o incluso sube un poco) y el brillo
+-- solo se levanta lo justo para que se note el cometa: el tono sigue siendo el
+-- del tema, apenas más encendido, nunca lechoso.
+local function _brighten(c, keepSat, lift)
+    -- 🎛️ V5.4.8: el "lift" ahora se escala con Config.AnimGlow (pestaña Modify),
+    -- así el usuario decide cuánto se enciende el cometa sin tocar el tono.
+    local glow = Config.AnimGlow or 0.30
+    lift = (lift or 0.10) * (glow / 0.30)
+    local h, s, v = Color3.toHSV(c)
+    return Color3.fromHSV(
+        h,
+        math.clamp(s * (keepSat or 1), 0, 1),
+        math.clamp(v * (1 + lift) + lift * 0.45, 0, 1)
+    )
+end
+-- Realce medio (bandas laterales del cometa) y núcleo del cometa.
+-- keepSat >= 1 mantiene el color "profundo"; el lift es pequeño a propósito.
+local function _hotColor(c) return _brighten(c, 1.04, 0.16) end
+local function _blazeColor(c) return _brighten(c, 1.08, 0.30) end
+local STROKE_NEUTRAL = Color3.new(1, 1, 1)
+-- 🩸 V5.4.6: base del borde animado. El color GLOW de cada tema es la versión
+-- "clara" del acento (Blood = 255,70,70 → rosa fuego). Para el borde lo
+-- volvemos más profundo: sube la saturación y baja el valor, así Blood queda
+-- rojo sangre, Obsidian morado vino y Emerald verde bosque, en vez de neón.
+-- V5.4.8: la profundidad es ajustable (Config.AnimDepth).
+local function _deepen(c)
+    local h, s, v = Color3.toHSV(c)
+    return Color3.fromHSV(h, math.clamp(s * 1.22, 0, 1), math.clamp(v * (Config.AnimDepth or 0.58), 0, 1))
+end
+
 local function _borderSeq(accent)
-    local deep = accent:Lerp(BLACK, 0.78)
-    local mid  = accent:Lerp(BLACK, 0.25)
+    accent = _deepen(accent)
+    local deep = accent:Lerp(BLACK, 0.98)
+    local dim  = accent:Lerp(BLACK, 0.80)
+    local mid  = accent:Lerp(BLACK, 0.42)
+    local hot  = _hotColor(accent)
+    local blaze = _blazeColor(accent)
+    return ColorSequence.new({
+        ColorSequenceKeypoint.new(0, deep),
+        ColorSequenceKeypoint.new(0.10, dim),
+        ColorSequenceKeypoint.new(0.22, mid),
+        ColorSequenceKeypoint.new(0.34, accent),
+        ColorSequenceKeypoint.new(0.44, hot),
+        ColorSequenceKeypoint.new(0.50, blaze),
+        ColorSequenceKeypoint.new(0.56, hot),
+        ColorSequenceKeypoint.new(0.66, accent),
+        ColorSequenceKeypoint.new(0.78, mid),
+        ColorSequenceKeypoint.new(0.90, dim),
+        ColorSequenceKeypoint.new(1, deep)
+    })
+end
+
+-- 🌊 V5.4.4: degradado de "ola" para el TEXTO de los shortcuts en ON.
+-- Un UIGradient sobre un TextLabel tiñe las letras; animando su Offset.X la
+-- luz viaja de izquierda a derecha. Es UNA escritura de propiedad por frame
+-- por etiqueta encendida — más barato que el pulso anterior (que escribía un
+-- Color3 nuevo) y no crea ningún Instance ni Tween por frame.
+-- 🎨 V5.4.5: la cresta de la ola también deja el blanco y usa el tono del tema
+-- a máximo brillo, para que la letra ON se lea siempre "del color del tema".
+local function _waveSeq(accent)
+    accent = _deepen(accent)
+    local deep = accent:Lerp(BLACK, 0.80)
+    local mid  = accent:Lerp(BLACK, 0.35)
     local hot  = _hotColor(accent)
     return ColorSequence.new({
         ColorSequenceKeypoint.new(0, deep),
-        ColorSequenceKeypoint.new(0.12, mid),
-        ColorSequenceKeypoint.new(0.24, accent),
-        ColorSequenceKeypoint.new(0.36, hot),
-        ColorSequenceKeypoint.new(0.50, Color3.new(1, 1, 1)),
-        ColorSequenceKeypoint.new(0.64, hot),
-        ColorSequenceKeypoint.new(0.76, accent),
-        ColorSequenceKeypoint.new(0.88, mid),
+        ColorSequenceKeypoint.new(0.30, mid),
+        ColorSequenceKeypoint.new(0.46, accent),
+        ColorSequenceKeypoint.new(0.55, hot),
+        ColorSequenceKeypoint.new(0.64, accent),
+        ColorSequenceKeypoint.new(0.80, mid),
         ColorSequenceKeypoint.new(1, deep)
     })
 end
 
 -- Asigna el hook declarado arriba, ahora que _borderSeq ya existe.
+-- 🩹 V5.5.1: un UIStroke con degradado animado necesita base BLANCA (el
+-- gradiente MULTIPLICA el color del stroke). Si el degradado se apaga
+-- (Modify ▸ Widgets = OFF) esa base blanca queda a la vista y se ven los
+-- bordes blancos feos que no combinan con el tema. Desde aquí el color base
+-- se decide en UN solo lugar: blanco cuando la animación está encendida,
+-- color BORDER del tema cuando está apagada.
+local function _paintInnerStroke(stroke)
+    if not stroke or not stroke.Parent then return end
+    local on = Config.InnerBorders ~= false
+    pcall(function()
+        stroke.Color = on and STROKE_NEUTRAL or (CurrentTheme.BORDER or STROKE_NEUTRAL)
+        local base = stroke:GetAttribute("BaseThickness")
+        if base then stroke.Thickness = on and math.max(base, 1.4) or base end
+    end)
+end
+
 _registerInnerStroke = function(stroke, properties)
     if #InnerBorderGradients >= INNER_BORDER_LIMIT then return end
     if stroke:GetAttribute("ThemeStroke") ~= "BORDER" then return end
     if stroke:FindFirstChildOfClass("UIGradient") then return end
+    stroke:SetAttribute("BaseThickness", properties.Thickness or stroke.Thickness or 1)
+    stroke:SetAttribute("AnimBorder", true)
     local g = Instance.new("UIGradient")
     g.Color = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
     g.Rotation = 45
+    g.Enabled = Config.InnerBorders ~= false
     g.Parent = stroke
-    if (properties.Thickness or 1) < 1.4 then
-        pcall(function() stroke.Thickness = 1.4 end)
-    end
+    _paintInnerStroke(stroke)
     InnerBorderGradients[#InnerBorderGradients + 1] = g
 end
 local BordeGradient = create("UIGradient", {
@@ -825,7 +970,7 @@ local DecorLine = create("Frame", {Size = UDim2.new(0, 80, 0, 3), Position = UDi
 create("UICorner", {CornerRadius = UDim.new(1, 0)}, DecorLine)
 local DecorGradient = create("UIGradient", {
     Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+        ColorSequenceKeypoint.new(0, _blazeColor(CurrentTheme.ACCENT)),
         ColorSequenceKeypoint.new(0.35, CurrentTheme.ACCENT),
         ColorSequenceKeypoint.new(1, CurrentTheme.ACCENT)
     }),
@@ -949,7 +1094,14 @@ local ContentContainer = create("Frame", {Name = "ContentContainer", Size = UDim
 
 local OpenCloseBtn = create("TextButton", {Name = "KillerHubToggle", Size = UDim2.new(0, 46, 0, 46), Position = UDim2.new(0, Config.BtnX or 15, 0, Config.BtnY or 100), BackgroundColor3 = CurrentTheme.BG_MAIN, Text = "", Active = true}, ScreenGui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, OpenCloseBtn)
-local FloatingStroke = create("UIStroke", {Thickness = 1.5, Color = CurrentTheme.BORDER}, OpenCloseBtn)
+-- ✨ V5.4.6: el botón que abre/cierra el GUI ahora lleva el MISMO borde
+-- animado (cometa oscuro) que la ventana y los shortcuts. Se pinta neutro y
+-- el color lo pone el UIGradient; lo rota la única conexión Heartbeat
+-- compartida (_borderAnimStep), así que no cuesta nada extra.
+local FloatingStroke = create("UIStroke", {Thickness = 2.4, Color = STROKE_NEUTRAL, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, OpenCloseBtn)
+local FloatingStrokeGradient = create("UIGradient", {
+    Color = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT), Rotation = 0
+}, FloatingStroke)
 local BtnIcon = create("ImageLabel", {Name = "Icon", Size = UDim2.new(1, 0, 1, 0), ScaleType = Enum.ScaleType.Crop, BackgroundTransparency = 1, Image = "rbxassetid://84689030731870", ImageColor3 = CurrentTheme.ACCENT}, OpenCloseBtn)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, BtnIcon)
 
@@ -1041,55 +1193,118 @@ end
 -- así que aunque haya 20 shortcuts en pantalla el costo sigue siendo trivial.
 -- Se apaga por completo (early return, cero trabajo) con Config.MenuAnimEnabled.
 -- ============================================================================
-local BORDER_ANIM_SPEED = 185 -- grados por segundo: notoriamente más ágil, sin marear
+local BORDER_ANIM_SPEED = 185 -- valor base; Config.AnimSpeed manda (pestaña Modify)
 local _borderAngle = 0
 local _innerAccum = 0
+-- ⚡ V5.5.0 — CULLING DE BORDES INTERNOS
+-- `cache` guarda, por gradiente, la lista de contenedores (página, host de
+-- páginas, frame de la pestaña) de los que depende su visibilidad. Se resuelve
+-- UNA sola vez por widget (tabla débil: si el widget se destruye, la entrada se
+-- recolecta sola). Cada tick solo se leen 1-3 booleanos en vez de escribir la
+-- rotación de widgets que están en pestañas ocultas.
+local _innerCull = {
+    cache = setmetatable({}, {__mode = "k"}),
+    chain = function(g)
+        local list, node, depth = {}, g.Parent, 0
+        while node and depth < 10 do
+            if node == ContentContainer or node == MainFrame or not node:IsA("GuiObject") then break end
+            list[#list + 1] = node
+            node = node.Parent
+            depth = depth + 1
+        end
+        return list
+    end,
+    visible = function(list)
+        for i = 1, #list do
+            local f = list[i]
+            if not f.Parent or not f.Visible then return false end
+        end
+        return true
+    end,
+}
+
 local ShortcutBorderAnims = {}  -- id -> UIGradient del borde del shortcut
 local ShortcutLabelPulses = {}  -- id -> {label = TextLabel, base = Color3, pulse = Color3}
+local ShortcutLabelWaves = {}   -- id -> UIGradient del texto (ola hacia la derecha)
+local WAVE_SPEED = 0.85         -- valor base; Config.WaveSpeed manda
+local _waveOffset = 0
 
 local function _borderAnimStep(dt)
     if not _animEnabled() then return end
-    _borderAngle = (_borderAngle + dt * BORDER_ANIM_SPEED) % 360
+    -- ⚡ V5.5.1: si no hay NADA animable en pantalla (menú cerrado/sin foco,
+    -- botón flotante oculto y sin shortcuts activos) el frame no cuesta nada:
+    -- ni siquiera avanzamos el ángulo. Antes se seguían haciendo cuentas y
+    -- comprobaciones cada frame con el hub cerrado.
+    local scLive = next(ShortcutBorderAnims) ~= nil or next(ShortcutLabelWaves) ~= nil
+    local winLive = MainFrame.Visible and menuFocused
+    local floatLive = OpenCloseBtn.Visible and Config.FloatBorder ~= false
+    if not (winLive or floatLive or scLive) then return end
+    _borderAngle = (_borderAngle + dt * (Config.AnimSpeed or BORDER_ANIM_SPEED)) % 360
+    local menuLive = winLive
 
-    if MainFrame.Visible and menuFocused then
+    if menuLive and Config.WindowBorder ~= false then
         BordeGradient.Rotation = _borderAngle
         OuterGlowGradient.Rotation = _borderAngle
     end
 
+    -- Borde animado del botón flotante de abrir/cerrar (siempre visible).
+    if FloatingStrokeGradient and OpenCloseBtn.Visible and Config.FloatBorder ~= false then
+        FloatingStrokeGradient.Rotation = _borderAngle
+    end
+
     -- Bordes internos finos: se refrescan a ~30 Hz (y solo con el menú a la
     -- vista) para que el coste no crezca aunque haya decenas de widgets.
-    if MainFrame.Visible and menuFocused then
+    -- V5.5.0 ⚡: además solo se escribe la rotación de los bordes que el jugador
+    -- REALMENTE está viendo. Los widgets de pestañas ocultas se saltan (una
+    -- comparación booleana en vez de una escritura de propiedad), así el costo
+    -- por frame ya no crece con el total de widgets del hub, solo con los de la
+    -- pestaña abierta. La página contenedora se resuelve una única vez y queda
+    -- cacheada en _innerCull.
+    if menuLive and Config.InnerBorders ~= false then
         _innerAccum = _innerAccum + dt
         if _innerAccum >= 0.033 then
             _innerAccum = 0
-            local n = #InnerBorderGradients
-            for i = n, 1, -1 do
+            for i = #InnerBorderGradients, 1, -1 do
                 local g = InnerBorderGradients[i]
                 if g.Parent then
-                    g.Rotation = _borderAngle
+                    local chain = _innerCull.cache[g]
+                    if not chain then
+                        chain = _innerCull.chain(g)
+                        _innerCull.cache[g] = chain
+                    end
+                    if _innerCull.visible(chain) then
+                        g.Rotation = _borderAngle
+                    end
                 else
+                    _innerCull.cache[g] = nil
                     table.remove(InnerBorderGradients, i)
                 end
             end
         end
     end
 
-    if next(ShortcutBorderAnims) ~= nil then
+
+    -- Shortcuts flotantes: ahora respetan su propio toggle (Modify ▸ Shortcuts).
+    if Config.ShortcutBorder ~= false and next(ShortcutBorderAnims) ~= nil then
         for _, gradient in pairs(ShortcutBorderAnims) do
             gradient.Rotation = _borderAngle
         end
     end
 
-    if next(ShortcutLabelPulses) ~= nil then
-        -- Un solo seno compartido: todas las etiquetas ON laten en fase,
-        -- se ve intencional en vez de aleatorio y es una sola llamada a math.sin.
-        local pulse = 0.5 + 0.5 * math.sin(os.clock() * 3.2)
-        for _, p in pairs(ShortcutLabelPulses) do
-            p.label.TextColor3 = p.base:Lerp(p.pulse, pulse)
+    -- 🌊 Ola de luz en el texto de los shortcuts ON: un ÚNICO offset compartido
+    -- para todas las etiquetas (una sola cuenta por frame, después solo una
+    -- asignación de Offset por etiqueta encendida). Va de -1 a 1 en X, así la
+    -- luz entra por la izquierda y sale por la derecha, en loop continuo.
+    if next(ShortcutLabelWaves) ~= nil then
+        _waveOffset = (_waveOffset + dt * (Config.WaveSpeed or WAVE_SPEED)) % 1
+        local off = Vector2.new(_waveOffset * 2 - 1, 0)
+        for _, g in pairs(ShortcutLabelWaves) do
+            g.Offset = off
         end
     end
 end
 connect(RunService.Heartbeat, _borderAnimStep)
+
 
 local function setMenuVisibility(visible)
     menuVisible = visible
@@ -1235,6 +1450,57 @@ local KillerHub = {
     CurrentTab = nil, AllElements = {}, TargetThemeElements = {}, _Trash = {},
     Elements = {}, TabRegistry = {} -- caché {Frame,Btn,Label,Icon,Line} por pestaña: evita FindFirstChild en cada click
 }
+
+-- ============================================================================
+-- 🎛️ RefreshBorderStyle: repinta TODOS los bordes animados con los valores
+-- actuales de Config (velocidad, brillo, profundidad, grosor). Se llama desde
+-- la pestaña Settings ▸ Modify cada vez que el usuario mueve algo.
+-- Es una pasada única (no por frame), así mover un slider no cuesta FPS.
+-- ============================================================================
+function KillerHub:RefreshBorderStyle()
+    local seq = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
+    MainStroke.Thickness = Config.AnimWidth or 3
+    MainStroke.Color = STROKE_NEUTRAL
+    MainStroke.Enabled = Config.WindowBorder ~= false
+    BordeGradient.Color = seq
+    OuterGlowGradient.Color = seq
+    if FloatingStroke then
+        FloatingStroke.Thickness = Config.FloatWidth or 2.4
+        FloatingStroke.Color = STROKE_NEUTRAL
+        FloatingStroke.Enabled = Config.FloatBorder ~= false
+    end
+    if FloatingStrokeGradient then FloatingStrokeGradient.Color = seq end
+    for i = #InnerBorderGradients, 1, -1 do
+        local g = InnerBorderGradients[i]
+        if g.Parent then
+            g.Color = seq
+            g.Enabled = Config.InnerBorders ~= false
+            _paintInnerStroke(g.Parent)
+        else
+            table.remove(InnerBorderGradients, i)
+        end
+    end
+    -- V5.4.9: el toggle de shortcuts ahora sí apaga/enciende su borde animado
+    -- (antes solo existía el del botón flotante de abrir/cerrar y no hacía nada).
+    local scOn = Config.ShortcutBorder ~= false
+    for _, g in pairs(ShortcutBorderAnims) do
+        if g.Parent then
+            g.Color = _borderSeq(_shortcutBorderColor and _shortcutBorderColor() or (CurrentTheme.GLOW or CurrentTheme.ACCENT))
+            g.Enabled = scOn
+            local st = g.Parent
+            if st and st:IsA("UIStroke") then
+                st.Enabled = scOn
+                if not scOn then st.Color = _shortcutBorderColor and _shortcutBorderColor() or CurrentTheme.BORDER end
+            end
+        end
+    end
+    local wave = _waveSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
+    for _, g in pairs(ShortcutLabelWaves) do
+        if g.Parent then g.Color = wave end
+    end
+end
+
+
 
 -- ============================================================================
 -- 💎 SISTEMA PREMIUM DE NOTIFICACIONES DINÁMICAS
@@ -1587,7 +1853,7 @@ function KillerHub:SetTheme(themeName)
     saveConfig()
     
     MainFrame.BackgroundColor3 = CurrentTheme.BG_MAIN
-    MainStroke.Color = CurrentTheme.BORDER
+    MainStroke.Color = STROKE_NEUTRAL
     OuterGlow.Color = CurrentTheme.GLOW or CurrentTheme.ACCENT
     BordeGradient.Color = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
     OuterGlowGradient.Color = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
@@ -1595,7 +1861,10 @@ function KillerHub:SetTheme(themeName)
         local seq = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
         for i = #InnerBorderGradients, 1, -1 do
             local g = InnerBorderGradients[i]
-            if g.Parent then g.Color = seq else table.remove(InnerBorderGradients, i) end
+            if g.Parent then
+                g.Color = seq
+                if g.Parent:IsA("UIStroke") then _paintInnerStroke(g.Parent) end
+            else table.remove(InnerBorderGradients, i) end
         end
     end
     updateBackgroundImage()
@@ -1604,7 +1873,7 @@ function KillerHub:SetTheme(themeName)
     Title.TextColor3 = CurrentTheme.TEXT_WHITE
     DecorLine.BackgroundColor3 = CurrentTheme.ACCENT
     DecorGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+        ColorSequenceKeypoint.new(0, _blazeColor(CurrentTheme.ACCENT)),
         ColorSequenceKeypoint.new(0.35, CurrentTheme.ACCENT),
         ColorSequenceKeypoint.new(1, CurrentTheme.ACCENT)
     })
@@ -1616,7 +1885,10 @@ function KillerHub:SetTheme(themeName)
     SearchInput.TextColor3 = CurrentTheme.TEXT_WHITE
     SearchInput.PlaceholderColor3 = CurrentTheme.TEXT_MUTED
     OpenCloseBtn.BackgroundColor3 = CurrentTheme.BG_MAIN
-    FloatingStroke.Color = CurrentTheme.BORDER
+    FloatingStroke.Color = STROKE_NEUTRAL
+    if FloatingStrokeGradient then
+        FloatingStrokeGradient.Color = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
+    end
     BtnIcon.ImageColor3 = menuVisible and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
     
     -- 🔄 Instant repaint: every instance tagged at creation time gets the new
@@ -1642,7 +1914,14 @@ function KillerHub:SetTheme(themeName)
             local ts = v:GetAttribute("ThemeStroke")
             if ts then
                 pcall(function()
-                    v.Color = resolveThemeColor(ts)
+                    -- V5.5.1: los strokes con borde animado mantienen su base
+                    -- blanca (o el color del tema si la animación está OFF);
+                    -- repintarlos aquí rompía el degradado o dejaba bordes blancos.
+                    if v:GetAttribute("AnimBorder") then
+                        _paintInnerStroke(v)
+                    else
+                        v.Color = resolveThemeColor(ts)
+                    end
                     v.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
                 end)
             end
@@ -1954,7 +2233,166 @@ end
 local TabMethods = {}
 TabMethods.__index = TabMethods
 
+-- ============================================================================
+-- 🗂️ CreatePage: SECCIONES DOBLES DENTRO DE UNA MISMA PESTAÑA
+-- ----------------------------------------------------------------------------
+--   local Visuals = Window:CreateTab("Visuals", "Eye")
+--   local Shaders = Visuals:CreatePage("Shaders")
+--   local Extras  = Visuals:CreatePage("Extras")
+--   Shaders:CreateToggle(...)   -- misma API que una pestaña normal
+--
+-- La primera vez que se llama, la pestaña se convierte en un "host": arriba
+-- aparece una barra de píldoras (Shaders / Extras / ...) y debajo se muestra
+-- solo la página activa. Si la pestaña ya tenía widgets sueltos, esos quedan
+-- en una primera página automática llamada "Main".
+-- Solo la página visible existe en pantalla, así que no cuesta más que una
+-- pestaña normal por más páginas que crees.
+-- ============================================================================
+function TabMethods:CreatePage(pageName, iconId)
+    if not SafeAssert("CreatePage", {
+        ["pageName"] = {value = pageName, types = {"string"}}
+    }) then return end
+    if self._isPage then return self._tab:CreatePage(pageName, iconId) end
+
+    local tabName = self.Frame.Name:gsub("Frame$", "")
+    local host = self._pageHost
+
+    -- 1) Primera llamada: montamos el host + la barra de píldoras.
+    if not host then
+        local baseFrame = self.Frame
+        host = create("Frame", {
+            Name = tabName .. "Pages", Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1, Visible = baseFrame.Visible
+        }, ContentContainer)
+
+        local bar = create("ScrollingFrame", {
+            Name = "PageBar", Size = UDim2.new(1, -14, 0, 32), Position = UDim2.new(0, 7, 0, 6),
+            BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 0,
+            ScrollingDirection = Enum.ScrollingDirection.X, CanvasSize = UDim2.new(0, 0, 0, 0),
+            AutomaticCanvasSize = Enum.AutomaticSize.X
+        }, host)
+        create("UIListLayout", {
+            FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6),
+            SortOrder = Enum.SortOrder.LayoutOrder, VerticalAlignment = Enum.VerticalAlignment.Center
+        }, bar)
+
+        -- La pestaña pasa a mostrarse a través del host (selectTab toca reg.Frame).
+        local reg = KillerHub.TabRegistry[tabName]
+        if reg then reg.Frame = host end
+        KillerHub.Frames[tabName] = host
+
+        baseFrame.Parent = host
+        baseFrame.Position = UDim2.new(0, 7, 0, 44)
+        baseFrame.Size = UDim2.new(1, -14, 1, -51)
+        baseFrame.Visible = false
+
+        self._pageHost = host
+        self._pageBar = bar
+        self._pages = {}
+        self._baseFrame = baseFrame
+
+        -- ¿La pestaña ya tenía widgets? Entonces se conservan en "Main".
+        local hasWidgets = false
+        for _, child in ipairs(baseFrame:GetChildren()) do
+            if child:IsA("GuiObject") then hasWidgets = true break end
+        end
+        if hasWidgets then self:_AddPagePill("Main", nil, baseFrame) end
+    end
+
+    -- 2) Cada página es un clon vacío del cuerpo de la pestaña.
+    local pageFrame = create("ScrollingFrame", {
+        Name = pageName .. "Page", Size = UDim2.new(1, -14, 1, -51), Position = UDim2.new(0, 7, 0, 44),
+        BackgroundColor3 = CurrentTheme.BG_MAIN, BackgroundTransparency = 0.5, Visible = false,
+        ScrollBarThickness = 2, ScrollBarImageColor3 = CurrentTheme.ACCENT, BorderSizePixel = 0,
+        CanvasSize = UDim2.new(0, 0, 0, 0)
+    }, host)
+    create("UICorner", {CornerRadius = UDim.new(0, 12)}, pageFrame)
+    local pStroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, pageFrame)
+    local pLayout = create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6)}, pageFrame)
+    create("UIPadding", {PaddingTop = UDim.new(0, 8), PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8)}, pageFrame)
+    connect(pLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+        pageFrame.CanvasSize = UDim2.new(0, 0, 0, pLayout.AbsoluteContentSize.Y + 20)
+    end)
+    table.insert(KillerHub.TargetThemeElements, function()
+        pageFrame.BackgroundColor3 = CurrentTheme.BG_MAIN
+        pageFrame.ScrollBarImageColor3 = CurrentTheme.ACCENT
+        pStroke.Color = CurrentTheme.BORDER
+    end)
+
+    self:_AddPagePill(pageName, iconId, pageFrame)
+
+    local pageObj = setmetatable({Frame = pageFrame, _isPage = true, _tab = self, _pageName = pageName}, TabMethods)
+    self._pages[pageName] = pageObj
+    return pageObj
+end
+
+-- Píldora de la barra superior (estilo del hub de referencia: cápsula con
+-- puntito de estado a la izquierda cuando está activa).
+function TabMethods:_AddPagePill(pageName, iconId, targetFrame)
+    local bar = self._pageBar
+    local pill = create("TextButton", {
+        Name = pageName .. "Pill", Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X,
+        BackgroundColor3 = CurrentTheme.BG_SECONDARY, BackgroundTransparency = 0.45,
+        Text = "", AutoButtonColor = false
+    }, bar)
+    create("UICorner", {CornerRadius = UDim.new(1, 0)}, pill)
+    create("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 14)}, pill)
+    local dot = create("Frame", {
+        Size = UDim2.new(0, 6, 0, 6), Position = UDim2.new(0, 0, 0.5, -3), AnchorPoint = Vector2.new(0, 0.5),
+        BackgroundColor3 = CurrentTheme.ACCENT, BorderSizePixel = 0, BackgroundTransparency = 1
+    }, pill)
+    dot.Position = UDim2.new(0, 0, 0.5, 0)
+    create("UICorner", {CornerRadius = UDim.new(1, 0)}, dot)
+    local label = create("TextLabel", {
+        Size = UDim2.new(0, 0, 1, 0), Position = UDim2.new(0, 12, 0, 0), AutomaticSize = Enum.AutomaticSize.X,
+        BackgroundTransparency = 1, Text = pageName, TextColor3 = CurrentTheme.TEXT_MUTED,
+        Font = Enum.Font.GothamBold, TextSize = 13
+    }, pill)
+    pcall(function() label.TextStrokeTransparency = 1 end)
+
+    self._pageRegistry = self._pageRegistry or {}
+    self._pageRegistry[pageName] = {Pill = pill, Label = label, Dot = dot, Frame = targetFrame}
+
+    local function selectPage()
+        for pName, reg in pairs(self._pageRegistry) do
+            local isSel = (pName == pageName)
+            reg.Frame.Visible = isSel
+            reg.Label.TextColor3 = isSel and CurrentTheme.TEXT_WHITE or CurrentTheme.TEXT_MUTED
+            reg.Dot.BackgroundColor3 = CurrentTheme.ACCENT
+            reg.Dot.BackgroundTransparency = isSel and 0 or 1
+            reg.Pill.BackgroundColor3 = isSel and CurrentTheme.ACCENT or CurrentTheme.BG_SECONDARY
+            TweenService:Create(reg.Pill, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                BackgroundTransparency = isSel and 0.78 or 0.45
+            }):Play()
+        end
+        self._activePage = pageName
+    end
+    connect(pill.MouseButton1Click, function()
+        if self._activePage ~= pageName then selectPage() playUISound() end
+    end)
+    table.insert(KillerHub.TargetThemeElements, function()
+        local isSel = (self._activePage == pageName)
+        label.TextColor3 = isSel and CurrentTheme.TEXT_WHITE or CurrentTheme.TEXT_MUTED
+        label.Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamBold
+        dot.BackgroundColor3 = CurrentTheme.ACCENT
+        pill.BackgroundColor3 = isSel and CurrentTheme.ACCENT or CurrentTheme.BG_SECONDARY
+        pill.BackgroundTransparency = isSel and 0.78 or 0.45
+    end)
+
+    if not self._activePage then selectPage() end
+    return pill
+end
+
+-- Devuelve una página ya creada: Tab:GetPage("Extras")
+function TabMethods:GetPage(pageName)
+    return self._pages and self._pages[pageName] or nil
+end
+
+
 function TabMethods:RegisterElement(inst, textLabel, tabName)
+    -- Las páginas heredan el nombre de su pestaña para que el buscador global
+    -- las filtre igual que a los widgets sueltos.
+    if self._isPage and self._tab then tabName = self._tab.Frame.Name end
     table.insert(KillerHub.AllElements, {Instance = inst, Label = textLabel, Tab = tabName})
     -- 🩹 FIX DE RENDIMIENTO: antes esto llamaba a KillerHub:SetFont(), que recorre
     -- TODOS los descendientes del ScreenGui, por cada widget nuevo creado. Con N
@@ -2038,6 +2476,29 @@ function TabMethods:CreateSection(text)
     }
     KillerHub.Elements[text] = secObj
     return secObj
+end
+
+-- 📝 V5.4.9 · CreateHint(text): una línea corta y apagada que explica para qué
+-- sirve la opción de arriba. Es solo un TextLabel (sin fondo ni stroke), así que
+-- no cuesta nada de rendimiento ni ensucia el diseño.
+function TabMethods:CreateHint(text)
+    if not SafeAssert("CreateHint", {["text"] = {value = text, types = {"string"}}}) then return end
+    local Hint = create("TextLabel", {
+        Size = UDim2.new(1, -4, 0, 15),
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = CurrentTheme.TEXT_MUTED,
+        Font = Enum.Font.GothamMedium,
+        TextSize = 10,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top
+    }, self.Frame)
+    table.insert(KillerHub.TargetThemeElements, function()
+        Hint.TextColor3 = CurrentTheme.TEXT_MUTED
+    end)
+    self:RegisterElement(Hint, Hint, self.Frame.Name)
+    return {SetText = function(_, t) Hint.Text = t end}
 end
 
 function TabMethods:CreateToggle(flagName, text, callback, default)
@@ -3522,6 +3983,8 @@ end
 local function darkenColor(c, f)
     return Color3.new(c.R * (1 - f), c.G * (1 - f), c.B * (1 - f))
 end
+_shortcutBorderColor = getShortcutBorder
+
 local function getShortcutBorderDark()
     return darkenColor(getShortcutBorder(), 0.55)
 end
@@ -3649,16 +4112,18 @@ local function refreshShortcutVisual(sc)
     local isOn = (sc.data.kind == "toggle" and sc.data.getState()) and true or false
     -- Thin themed outline (purple on Obsidian, red on Blood / Classic Dark).
     if sc.stroke then
-        sc.stroke.Color = getShortcutBorderDark()
+        -- El color va neutro (blanco): el degradado animado es el que aporta
+        -- todo el color, si no el tono oscuro lo apagaba y casi no se veía.
+        sc.stroke.Color = STROKE_NEUTRAL
         sc.stroke.Thickness = 2.2
         -- 🩹 Antes el borde ignoraba la opacidad configurada del botón y se
         -- quedaba 100% intacto aunque el fondo se pusiera casi invisible. Ahora
         -- escala junto con cfg.opacity: mientras más transparente el botón, más
         -- transparente el borde también — pero nunca llega a 1 (invisible
         -- total), se limita a 0.88 como piso siempre visible.
-        local baseTransp = isOn and 0 or 0.12
-        local opacityPenalty = (1 - (sc.cfg.opacity or 1)) * 0.35
-        sc.stroke.Transparency = math.min(baseTransp + opacityPenalty, 0.6)
+        local baseTransp = isOn and 0 or 0.06
+        local opacityPenalty = (1 - (sc.cfg.opacity or 1)) * 0.25
+        sc.stroke.Transparency = math.min(baseTransp + opacityPenalty, 0.42)
         sc.stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     end
     if sc.strokeGradient then
@@ -3671,7 +4136,9 @@ local function refreshShortcutVisual(sc)
         -- 🩹 Antes el texto ON se ponía blanco simple; ahora toma el color del
         -- tema (rojo en Blood, morado en Obsidian, etc.), igual que el resto de
         -- los acentos "encendidos" de la librería.
-        sc.label.TextColor3 = isOn and getShortcutBorder() or lightenColor(CurrentTheme.TEXT_MUTED, 0.5)
+        -- En ON el color real lo pone el degradado de la ola, por eso el
+        -- TextColor3 se deja blanco neutro (el UIGradient multiplica sobre él).
+        sc.label.TextColor3 = isOn and Color3.new(1, 1, 1) or lightenColor(CurrentTheme.TEXT_MUTED, 0.5)
         sc.label.Font = currentFontEnum()
         -- 🩹 TextScaled maneja el tamaño real; solo actualizamos el techo (Max)
         -- según el tamaño del botón para que no crezca de más al agrandarlo.
@@ -3687,15 +4154,16 @@ local function refreshShortcutVisual(sc)
         -- Apagado, la letra se queda estática (tal como pediste) — solo el
         -- borde sigue animado. Se registra/desregistra acá mismo así siempre
         -- queda en sync con el estado real del toggle.
-        if isOn then
-            ShortcutLabelPulses[sc.data.id] = {
-                label = sc.label,
-                base = getShortcutBorder(),
-                pulse = lightenColor(getShortcutBorder(), 0.6)
-            }
-        else
-            ShortcutLabelPulses[sc.data.id] = nil
+        if sc.labelGradient then
+            sc.labelGradient.Color = _waveSeq(getShortcutBorder())
+            sc.labelGradient.Enabled = isOn
         end
+        if isOn and sc.labelGradient then
+            ShortcutLabelWaves[sc.data.id] = sc.labelGradient
+        else
+            ShortcutLabelWaves[sc.data.id] = nil
+        end
+        ShortcutLabelPulses[sc.data.id] = nil
     end
     if sc.accentBar then
         -- 📏 The bar now fits INSIDE the button for every shape (it used to
@@ -3753,6 +4221,7 @@ local function destroyShortcut(id)
     if sc.frame then pcall(function() sc.frame:Destroy() end) end
     ShortcutBorderAnims[id] = nil
     ShortcutLabelPulses[id] = nil
+    ShortcutLabelWaves[id] = nil
     Shortcuts[id] = nil
 end
 
@@ -3782,7 +4251,7 @@ local function createFloating(sc)
     applyShape(frame, cfg.shape)
     -- Thin themed outline around every floating shortcut (tono oscuro del
     -- tema, no el acento brillante — ver getShortcutBorderDark()).
-    local stroke = create("UIStroke", {Thickness = 2.2, Color = getShortcutBorderDark(), Transparency = 0.05, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, frame)
+    local stroke = create("UIStroke", {Thickness = 2.2, Color = STROKE_NEUTRAL, Transparency = 0.05, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, frame)
     -- ✨ Degradado giratorio (misma "luz recorriendo el borde" que la ventana
     -- principal): se registra en ShortcutBorderAnims y la ÚNICA conexión
     -- Heartbeat compartida (_borderAnimStep) lo va rotando. No crea ninguna
@@ -3813,6 +4282,13 @@ local function createFloating(sc)
         TextScaled = true
     }, frame)
     create("UITextSizeConstraint", {MaxTextSize = math.clamp(math.floor(sc.cfg.size * 0.24), 8, 14), MinTextSize = 6}, label)
+    -- 🌊 Degradado de "ola" del texto: solo se enciende cuando el shortcut está
+    -- en ON (refreshShortcutVisual lo activa/desactiva). Apagado no cuesta nada.
+    local labelGradient = create("UIGradient", {
+        Color = _waveSeq(getShortcutBorder()),
+        Rotation = 0,
+        Enabled = false
+    }, label)
     -- Micro animación al aparecer
     if Config.MenuAnimEnabled ~= false then
         local scaleFx = Instance.new("UIScale"); scaleFx.Scale = 0.85; scaleFx.Parent = frame
@@ -3820,7 +4296,7 @@ local function createFloating(sc)
         task.delay(0.28, function() if scaleFx then scaleFx:Destroy() end end)
     end
 
-    sc.frame, sc.stroke, sc.label, sc.accentBar, sc.strokeGradient = frame, stroke, label, accentBar, strokeGradient
+    sc.frame, sc.stroke, sc.label, sc.accentBar, sc.strokeGradient, sc.labelGradient = frame, stroke, label, accentBar, strokeGradient, labelGradient
 
     -- Drag multi-touch aislado: cada shortcut recuerda su propio input y lo
     -- ignora todo lo demás → mover cámara / caminar con otro dedo no interfiere
@@ -3915,9 +4391,10 @@ local function setShortcutActive(sc, active)
         refreshShortcutVisual(sc)
     else
         if sc.frame then pcall(function() sc.frame:Destroy() end) end
-        sc.frame, sc.stroke, sc.label, sc.accentBar, sc.strokeGradient = nil, nil, nil, nil, nil
+        sc.frame, sc.stroke, sc.label, sc.accentBar, sc.strokeGradient, sc.labelGradient = nil, nil, nil, nil, nil, nil
         ShortcutBorderAnims[sc.data.id] = nil
         ShortcutLabelPulses[sc.data.id] = nil
+        ShortcutLabelWaves[sc.data.id] = nil
     end
     if ShortcutActivators[sc.data.id] and ShortcutActivators[sc.data.id].refresh then
         ShortcutActivators[sc.data.id].refresh()
@@ -4621,17 +5098,38 @@ end
 -- ============================================================================
 local SettingsTab = KillerHub:CreateTab("Settings", "Settings") -- engranaje 7059346373 (ver IconLibrary)
 
-SettingsTab:CreateSection("Personalization")
-SettingsTab:CreateDropdown("SelectedTheme", "UI theme:", {"Obsidian", "Void Premium", "Midnight Emerald", "Classic Dark", "Sakura Blossom", "Blood"}, function(selected) KillerHub:SetTheme(selected) end, "Obsidian")
--- 🖼️ Fondo personalizado: enciende/apaga la imagen de fondo del tema actual
--- (definida en ThemeBackgroundImages, más arriba). Si el tema no tiene imagen
--- asignada todavía, este toggle simplemente no hace nada visible.
-SettingsTab:CreateToggle("BackgroundEnabled", "Activate Background", function(v)
+do -- 🔒 scope local: evita agotar los registros del chunk principal (límite Lua: 200 locals)
+-- 🗂️ Settings ahora usa PÁGINAS (sub-secciones dentro de la misma pestaña):
+--    General · Menu · Modify · Extras
+-- Un solo local (SP) para las 4 páginas: el chunk principal de Lua solo admite
+-- 200 variables locales y esta librería ya está cerca del tope.
+local SP = {
+    General = SettingsTab:CreatePage("General"),
+    Menu    = SettingsTab:CreatePage("Menu"),
+    Modify  = SettingsTab:CreatePage("Modify"),
+    Extras  = SettingsTab:CreatePage("Extras"),
+}
+SP.bulk = false
+SP.restyle = function()
+    if SP.bulk then return end -- durante "Reset style" se repinta una sola vez al final
+    if KillerHub.RefreshBorderStyle then KillerHub:RefreshBorderStyle() end
+end
+
+-- ─────────────────────────────── GENERAL ───────────────────────────────
+SP.General:CreateSection("Look")
+SP.General:CreateDropdown("SelectedTheme", "Theme", {"Obsidian", "Void Premium", "Midnight Emerald", "Classic Dark", "Sakura Blossom", "Blood"}, function(selected)
+    KillerHub:SetTheme(selected)
+    if KillerHub.RefreshBorderStyle then KillerHub:RefreshBorderStyle() end
+end, "Obsidian")
+SP.General:CreateHint("Color scheme of the whole hub.")
+-- 🖼️ Fondo del tema actual (definido en ThemeBackgroundImages).
+SP.General:CreateToggle("BackgroundEnabled", "Background", function(v)
     Config.BackgroundEnabled = v
     updateBackgroundImage()
 end, false)
+SP.General:CreateHint("Shows the theme wallpaper behind the menu.")
 
-local TopFonts = {
+SP.fonts = {
     "Gotham", "GothamMedium", "GothamBold", "GothamBlack", "GothamSemibold",
     "Roboto", "RobotoCondensed", "RobotoMono",
     "SourceSans", "SourceSansBold", "SourceSansSemibold",
@@ -4640,39 +5138,123 @@ local TopFonts = {
     "Sarpanch", "DenkOne", "Jura", "JosefinSans",
     "BuilderSans", "BuilderSansMedium", "BuilderSansBold"
 }
-SettingsTab:CreateDropdown("SelectedFont", "Font:", TopFonts, function(selected) KillerHub:SetFont(selected) end, "GothamMedium")
-SettingsTab:CreateSlider("UiOpacity", "UI Opacity", 0.3, 1, function(v) updateUiOpacity() end, 0.75)
+SP.General:CreateDropdown("SelectedFont", "Font", SP.fonts, function(selected) KillerHub:SetFont(selected) end, "GothamMedium")
+SP.General:CreateHint("Typeface used by every text in the hub.")
 
-SettingsTab:CreateSection("Menu Controls")
-SettingsTab:CreateToggle("MenuAnimEnabled", "UI Animation", function(v) Config.MenuAnimEnabled = v end, true)
-SettingsTab:CreateToggle("DisableNotifications", "Turn off notifications", function(v)
-    Config.DisableNotifications = v
-    if v then KillerHub:ClearNotifications() end
-end, false)
-SettingsTab:CreateToggle("AutoArrangeShortcuts", "Auto-organize Shortcuts", function(v) Config.AutoArrangeShortcuts = v end, true)
-SettingsTab:CreateKeybind("ToggleKey", "Close/Open Menu", Enum.KeyCode.RightControl, function(key)
+SP.General:CreateSection("Size")
+SP.General:CreateSlider("UiOpacity", "Opacity", 0.3, 1, function(v) updateUiOpacity() end, 0.75)
+SP.General:CreateHint("How solid the menu looks (low = see-through).")
+SP.General:CreateSlider("GuiWidth", "Width", 0, 1, function(v) updateGuiSize() end, 0.466)
+SP.General:CreateHint("Menu width on screen.")
+SP.General:CreateSlider("GuiHeight", "Height", 0, 1, function(v) updateGuiSize() end, 0.4)
+SP.General:CreateHint("Menu height on screen.")
+SP.General:CreateSlider("ToggleBtnSize", "Button size", 30, 80, function(v) updateButtonSize() end, 46)
+SP.General:CreateHint("Size of the floating icon that opens the hub.")
+
+-- ──────────────────────────────── MENU ─────────────────────────────────
+SP.Menu:CreateSection("Controls")
+SP.Menu:CreateKeybind("ToggleKey", "Open key", Enum.KeyCode.RightControl, function(key)
     -- Mantiene KillerHub.ToggleKey (EnumItem, API pública) en sync con
     -- Config.ToggleKey (string, lo que realmente usa el listener de teclado).
     if typeof(key) == "EnumItem" then KillerHub.ToggleKey = key end
 end)
-SettingsTab:CreateSlider("ToggleBtnSize", "UI Button Size", 30, 80, function(v) updateButtonSize() end, 46)
-SettingsTab:CreateSlider("Volume", "Interface Volume", 0, 1, function(v) Config.Volume = v end, 0.5)
-SettingsTab:CreateSlider("GuiWidth", "Adjust UI Width", 0, 1, function(v) updateGuiSize() end, 0.466)
-SettingsTab:CreateSlider("GuiHeight", "Adjust UI Height", 0, 1, function(v) updateGuiSize() end, 0.4)
+SP.Menu:CreateHint("Keyboard key that shows/hides the menu (PC).")
+SP.Menu:CreateSlider("Volume", "Volume", 0, 1, function(v) Config.Volume = v end, 0.5)
+SP.Menu:CreateHint("Loudness of the UI click sounds.")
 
-SettingsTab:CreateSection("Universal Configuration")
-SettingsTab:CreateParagraph("🌐 Universal persistence", "All your settings (styles, sizes, theme, keys, toggles, sliders, keybinds, and shortcuts) are saved in Universal.json and go with you to ANY game. Nothing is reset when you switch experiences.")
+SP.Menu:CreateSection("Behavior")
+SP.Menu:CreateToggle("MenuAnimEnabled", "Animations", function(v)
+    Config.MenuAnimEnabled = v
+    -- V5.4.9: al apagarlo, los bordes quedan en un ángulo fijo en vez de
+    -- congelarse a medio giro con el gradiente en cualquier posición.
+    if KillerHub.RefreshBorderStyle then KillerHub:RefreshBorderStyle() end
+end, true)
+SP.Menu:CreateHint("Open/close motion and moving border light.")
+SP.Menu:CreateToggle("DisableNotifications", "Mute alerts", function(v)
+    Config.DisableNotifications = v
+    if v then KillerHub:ClearNotifications() end
+end, false)
+SP.Menu:CreateHint("Hides the pop-up messages in the corner.")
+SP.Menu:CreateToggle("AutoArrangeShortcuts", "Auto-sort shortcuts", function(v) Config.AutoArrangeShortcuts = v end, true)
+SP.Menu:CreateHint("Places new floating shortcuts in a tidy grid.")
 
-SettingsTab:CreateSection("Shortcuts")
-SettingsTab:CreateParagraph("⌨ Shortcut keybinds", "Open any shortcut window (the small icon next to a toggle or button) and set a Keybind under Lock position. On PC that key fires the option instantly, without opening the menu.")
-SettingsTab:CreateParagraph("🧹 Quick cleaning", "Removes ALL floating shortcut boxes from the screen (including those created by external scripts). The original menu widgets will continue to function, and you can add shortcuts again as needed.")
-SettingsTab:CreateButton("Remove all shortcuts", function()
+-- ─────────────────────────────── MODIFY ────────────────────────────────
+-- Todo lo del borde animado se edita en vivo: cada cambio llama a
+-- RefreshBorderStyle(), que repinta una sola vez (nada corre por frame de más).
+
+SP.Modify:CreateSection("Border light")
+SP.Modify:CreateSlider("AnimSpeed", "Speed", 20, 500, function(v) Config.AnimSpeed = v end, 185)
+SP.Modify:CreateHint("How fast the light travels around the border.")
+SP.Modify:CreateSlider("AnimGlow", "Glow", 0, 1, function(v) Config.AnimGlow = v SP.restyle() end, 0.30)
+SP.Modify:CreateHint("Brightness of the light head.")
+SP.Modify:CreateSlider("AnimDepth", "Darkness", 0.15, 1, function(v) Config.AnimDepth = v SP.restyle() end, 0.58)
+SP.Modify:CreateHint("How dark the rest of the border stays.")
+SP.Modify:CreateSlider("AnimWidth", "Thickness", 1, 8, function(v) Config.AnimWidth = v SP.restyle() end, 3)
+SP.Modify:CreateHint("Border thickness of the main window.")
+
+SP.Modify:CreateSection("Where")
+SP.Modify:CreateToggle("WindowBorder", "Window", function(v) Config.WindowBorder = v SP.restyle() end, true)
+SP.Modify:CreateHint("Animated border around the main window.")
+SP.Modify:CreateToggle("InnerBorders", "Widgets", function(v) Config.InnerBorders = v SP.restyle() end, true)
+SP.Modify:CreateHint("Animated border on toggles, sliders and cards.")
+SP.Modify:CreateToggle("FloatBorder", "Float button", function(v) Config.FloatBorder = v SP.restyle() end, true)
+SP.Modify:CreateHint("Animated border on the open/close icon.")
+SP.Modify:CreateSlider("FloatWidth", "Float thickness", 1, 6, function(v) Config.FloatWidth = v SP.restyle() end, 2.4)
+SP.Modify:CreateHint("Border thickness of that icon.")
+SP.Modify:CreateToggle("ShortcutBorder", "Shortcut buttons", function(v) Config.ShortcutBorder = v SP.restyle() end, true)
+SP.Modify:CreateHint("Animated border on the floating shortcut boxes.")
+
+SP.Modify:CreateSection("Text wave")
+SP.Modify:CreateSlider("WaveSpeed", "Wave speed", 0.1, 3, function(v) Config.WaveSpeed = v end, 0.85)
+SP.Modify:CreateHint("Speed of the light sweeping the ON text.")
+-- ♻️ V5.5.0: antes esto solo tocaba Config, así que el cambio SÍ ocurría pero
+-- los sliders y toggles de la propia página se quedaban dibujados donde el
+-- usuario los había dejado (parecía que el botón no hacía nada). Ahora se
+-- aplica a través de KillerHub.Elements[flag]:Set(...), que mueve la bolita del
+-- slider, el número, el switch y guarda el JSON — un solo repintado al final.
+SP.applyEl = function(flag, value)
+    local el = KillerHub.Elements and KillerHub.Elements[flag]
+    if el and el.Set then
+        local ok = pcall(el.Set, el, value)
+        if ok then return end
+    end
+    Config[flag] = value
+end
+SP.Modify:CreateButton("Reset style", function()
+    SP.bulk = true -- evita N repintados mientras se reponen los 9 valores
+    SP.applyEl("AnimSpeed", 185)
+    SP.applyEl("AnimGlow", 0.30)
+    SP.applyEl("AnimDepth", 0.58)
+    SP.applyEl("AnimWidth", 3)
+    SP.applyEl("WaveSpeed", 0.85)
+    SP.applyEl("FloatWidth", 2.4)
+    SP.applyEl("WindowBorder", true)
+    SP.applyEl("InnerBorders", true)
+    SP.applyEl("FloatBorder", true)
+    SP.applyEl("ShortcutBorder", true)
+    SP.bulk = false
+    SP.restyle()
+    KillerHub:Notify("Style reset", "Border animation back to default.", 3)
+end)
+SP.Modify:CreateHint("Puts every border setting back to default.")
+
+-- ─────────────────────────────── EXTRAS ────────────────────────────────
+SP.Extras:CreateSection("Saving")
+SP.Extras:CreateParagraph("🌐 Universal save", "Everything (style, size, theme, keys, toggles, sliders, keybinds and shortcuts) is saved in Universal.json and follows you into ANY game. Nothing resets when you switch experiences.")
+
+SP.Extras:CreateSection("Shortcuts")
+SP.Extras:CreateParagraph("⌨ Keybinds", "Open any shortcut window (the small icon next to a toggle or button) and set a Keybind under Lock position. On PC that key fires the option instantly, without opening the menu.")
+SP.Extras:CreateParagraph("🧹 Clean up", "Removes ALL floating shortcut boxes from the screen. The menu widgets keep working and you can add shortcuts again anytime.")
+SP.Extras:CreateButton("Clear shortcuts", function()
     if KillerHub.ClearAllShortcuts then KillerHub:ClearAllShortcuts() end
 end)
+SP.Extras:CreateHint("Deletes every floating shortcut at once.")
 
-SettingsTab:CreateSection("Safety and Cleanliness")
-SettingsTab:CreateParagraph("⚠️ SHUTDOWN WARNING", "If you decide to unload the script, the interface will close and be completely removed from memory.")
-SettingsTab:CreateButton("Turn Off Script", function() KillerHub:Unload() end)
+SP.Extras:CreateSection("Danger")
+SP.Extras:CreateParagraph("⚠️ Unload", "If you unload the script, the interface closes and is fully removed from memory.")
+SP.Extras:CreateButton("Unload script", function() KillerHub:Unload() end)
+SP.Extras:CreateHint("Closes and removes the hub from this session.")
+end
 
 task.defer(function()
     KillerHub:SetTheme(Config.SelectedTheme or "Obsidian")
