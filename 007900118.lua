@@ -577,6 +577,83 @@ local ScreenGui = create("ScreenGui", {Name = "KillerHub_Universal", IgnoreGuiIn
 -- aparecían en clientes donde findNotifContainer() sólo miraba CoreGui/PlayerGui.
 _G.__KillerHub_ScreenGui__ = ScreenGui
 
+-- ============================================================================
+-- 🖥 V5.8.0 · SOPORTE PC / EXECUTORS DE ESCRITORIO (Wave, Potassium, Solara...)
+-- ----------------------------------------------------------------------------
+--  • Rueda del mouse: en PC la rueda NO llegaba a los ScrollingFrame porque
+--    varios contenedores/filas tienen Active = true y se comen el input. Aquí
+--    resolvemos manualmente el ScrollingFrame que está debajo del cursor y
+--    movemos su CanvasPosition. Funciona en TODAS las páginas y en el sidebar.
+--  • Barras de scroll más gruesas en PC (2px era casi invisible con mouse).
+--  • Todo va dentro de pcall: si un executor no expone alguna API, no rompe.
+-- ============================================================================
+local KH_IsPC = false
+pcall(function()
+    KH_IsPC = UserInputService.KeyboardEnabled and UserInputService.MouseEnabled
+        and not UserInputService.TouchEnabled
+end)
+KillerHubIsPC = KH_IsPC
+
+local KH_WHEEL_STEP = 62 -- px por muesca de rueda
+
+local function _khFindScrollUnderCursor()
+    local ok, list = pcall(function()
+        local pos = UserInputService:GetMouseLocation()
+        local inset = game:GetService("GuiService"):GetGuiInset()
+        return ScreenGui:GetGuiObjectsAtPosition(pos.X - inset.X, pos.Y - inset.Y)
+    end)
+    if not ok or type(list) ~= "table" then return nil end
+    for _, obj in ipairs(list) do
+        local node = obj
+        while node and node ~= ScreenGui do
+            if node:IsA("ScrollingFrame") and node.Visible and node.ScrollingEnabled
+                and node.AbsoluteCanvasSize.Y > node.AbsoluteWindowSize.Y + 1 then
+                return node
+            end
+            node = node.Parent
+        end
+    end
+    return nil
+end
+
+if KH_IsPC then
+    task.defer(function()
+        pcall(function()
+            local conn = UserInputService.InputChanged:Connect(function(input, gp)
+                if gp then return end
+                if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+                local sf = _khFindScrollUnderCursor()
+                if not sf then return end
+                local delta = -input.Position.Z * KH_WHEEL_STEP
+                local maxY = math.max(0, sf.AbsoluteCanvasSize.Y - sf.AbsoluteWindowSize.Y)
+                sf.CanvasPosition = Vector2.new(
+                    sf.CanvasPosition.X,
+                    math.clamp(sf.CanvasPosition.Y + delta, 0, maxY)
+                )
+            end)
+            table.insert(Connections, conn)
+        end)
+    end)
+
+    -- Barras de scroll usables con mouse
+    task.defer(function()
+        pcall(function()
+            local function thicken(inst)
+                if inst:IsA("ScrollingFrame") and inst.ScrollBarThickness < 6 then
+                    inst.ScrollBarThickness = 6
+                    inst.ScrollBarImageTransparency = 0.25
+                end
+            end
+            for _, d in ipairs(ScreenGui:GetDescendants()) do thicken(d) end
+            local c = ScreenGui.DescendantAdded:Connect(function(d)
+                task.defer(function() pcall(thicken, d) end)
+            end)
+            table.insert(Connections, c)
+        end)
+    end)
+end
+
+
 local function playUISound()
     if not Config.Volume or Config.Volume <= 0 then return end
     pcall(function()
@@ -1073,7 +1150,16 @@ local function makeDraggable(clickObject, dragObject)
             startPos = dragObject.Position
             
             moveConn = UserInputService.InputChanged:Connect(function(changedInput)
-                if dragging and (changedInput == activeInput) then
+                -- 🖥 V5.8.0 PC FIX: en PC el objeto de input que llega en
+                -- InputChanged es un MouseMovement DISTINTO al MouseButton1 que
+                -- inició el arrastre, así que la comparación `== activeInput`
+                -- nunca era verdadera y la ventana NO se podía mover con mouse
+                -- (Wave, Potassium, Solara, Swift...). Ahora aceptamos también
+                -- MouseMovement cuando el arrastre se inició con el mouse.
+                local isSame = (changedInput == activeInput)
+                local isMouseMove = (changedInput.UserInputType == Enum.UserInputType.MouseMovement
+                    and activeInput and activeInput.UserInputType == Enum.UserInputType.MouseButton1)
+                if dragging and (isSame or isMouseMove) then
                     task.defer(function()
                         if not dragging then return end
                         local delta = changedInput.Position - dragStart
@@ -1096,7 +1182,10 @@ local function makeDraggable(clickObject, dragObject)
             end)
             
             endConn = UserInputService.InputEnded:Connect(function(endedInput)
-                if endedInput == activeInput then
+                -- PC: el botón se suelta con otro objeto de input MouseButton1
+                if endedInput == activeInput
+                    or (activeInput and activeInput.UserInputType == Enum.UserInputType.MouseButton1
+                        and endedInput.UserInputType == Enum.UserInputType.MouseButton1) then
                     dragging = false 
                     activeInput = nil
                     if moveConn then moveConn:Disconnect() moveConn = nil end
@@ -4537,7 +4626,9 @@ local function createFloating(sc)
         -- release. They must NOT go into the global Connections table (it grew
         -- forever, one dead entry per drag = memory + GC pressure).
         moveConn = UserInputService.InputChanged:Connect(function(changedInput)
-            if not dragging or changedInput ~= activeInput then return end
+            if not dragging then return end
+            if changedInput ~= activeInput and not (changedInput.UserInputType == Enum.UserInputType.MouseMovement
+                and activeInput and activeInput.UserInputType == Enum.UserInputType.MouseButton1) then return end
             -- 🩹 Fix #4: filtra el tipo de input — solo nos interesa el movimiento
             -- real del mouse/dedo; ignora gamepad, scroll wheel, etc. que también
             -- disparan InputChanged y no deberían procesarse en cada frame.
@@ -6147,5 +6238,282 @@ end
 -- FIN ENHANCEMENT LAYER v1.3
 -- ============================================================================
 
+
+-- ============================================================================
+-- 📡 V5.8.1 · KILLER HUB ANALYTICS + PANEL DE USUARIOS (SOLO EL DUEÑO)
+-- ----------------------------------------------------------------------------
+-- EN CRISTIANO:
+--   1) Cada persona que ejecuta tu librería manda un "latido" a tu página web
+--      cada 60 segundos con: su UserId, su nombre, su display name, su avatar,
+--      su executor (Wave, Potassium...), si es PC o celular, y el juego.
+--   2) Tu página web guarda eso. Si alguien no manda latido en 3 minutos, deja
+--      de contar como "en línea".
+--   3) Solo TU cuenta de Roblox ve el contador en la topbar y el panel con las
+--      fotos. Para cualquier otra persona este bloque no crea NADA de UI.
+--
+-- CÓMO SE USA:
+--   • Pon tu UserId de Roblox abajo en KH_OWNER_USERID.
+--   • KH_ANALYTICS_URL ya viene puesta (tu página). Cuando publiques la web,
+--     cambia "-dev" por la versión publicada.
+--   • Panel web: abre la URL en el navegador y mete la clave KH_OWNER_KEY.
+--   • Panel dentro del juego: haz clic en el contador "👥 ... online" de la
+--     barra superior (solo aparece para ti).
+-- ============================================================================
+local KH_OWNER_USERID  = 312419911   -- ← PON AQUÍ TU USERID DE ROBLOX (ej: 1234567890)
+local KH_ANALYTICS_URL = "https://project--e9d15026-4081-4e74-a34f-79f6f3fea1cd-dev.lovable.app/api/public/kh"
+local KH_OWNER_KEY     = "killerhub-panel-2026"
+local KH_PING_INTERVAL = 60
+local KH_VERSION       = "5.8.1"
+
+do
+    if KH_ANALYTICS_URL ~= "" then
+        local function httpRequest(opts)
+            local req = (syn and syn.request) or (http and http.request) or http_request
+                or (fluxus and fluxus.request) or request
+            if typeof(req) ~= "function" then return nil end
+            local ok, res = pcall(req, opts)
+            if ok then return res end
+            return nil
+        end
+
+        local function detectExecutor()
+            local name
+            pcall(function()
+                if identifyexecutor then name = identifyexecutor()
+                elseif getexecutorname then name = getexecutorname() end
+            end)
+            if type(name) == "string" and name ~= "" then return name end
+            if syn then return "Synapse" end
+            if fluxus then return "Fluxus" end
+            if KRNL_LOADED then return "Krnl" end
+            return "desconocido"
+        end
+
+        local function detectPlatform()
+            local ok, touch = pcall(function() return UserInputService.TouchEnabled end)
+            local ok2, kb = pcall(function() return UserInputService.KeyboardEnabled end)
+            if ok and ok2 then
+                if kb then return "PC" end
+                if touch then return "Móvil" end
+            end
+            return "desconocido"
+        end
+
+        local function gameName()
+            local name = "Juego " .. tostring(game.PlaceId)
+            pcall(function()
+                local info = MarketplaceService and MarketplaceService:GetProductInfo(game.PlaceId)
+                if info and info.Name then name = info.Name end
+            end)
+            return name
+        end
+
+        local isOwner = (KH_OWNER_USERID ~= 0 and LocalPlayer and LocalPlayer.UserId == KH_OWNER_USERID)
+        local uid = (LocalPlayer and LocalPlayer.UserId) or 0
+        local payload
+        task.spawn(function()
+            payload = HttpService:JSONEncode({
+                userId      = uid,
+                username    = (LocalPlayer and LocalPlayer.Name) or "?",
+                displayName = (LocalPlayer and LocalPlayer.DisplayName) or "?",
+                avatarUrl   = ("https://www.roblox.com/headshot-thumbnail/image?userId=%d&width=150&height=150&format=png"):format(uid),
+                executor    = detectExecutor(),
+                platform    = detectPlatform(),
+                placeId     = tostring(game.PlaceId),
+                gameName    = gameName(),
+                version     = KH_VERSION,
+            })
+        end)
+
+        local function sendPing()
+            if not payload then return end
+            pcall(function()
+                httpRequest({
+                    Url = KH_ANALYTICS_URL .. "/ping",
+                    Method = "POST",
+                    Headers = { ["Content-Type"] = "application/json" },
+                    Body = payload,
+                })
+            end)
+        end
+
+        -- 1) Latido de presencia (lo manda todo el mundo, sin UI, en hilo aparte)
+        task.spawn(function()
+            repeat task.wait(0.5) until payload or _G.__KillerHub_Unloaded__
+            sendPing()
+            while task.wait(KH_PING_INTERVAL) ~= nil do
+                if _G.__KillerHub_Unloaded__ then break end
+                sendPing()
+            end
+        end)
+
+        -- 2) Lectura de datos: SOLO el dueño
+        local function fetchJson(path)
+            local res = httpRequest({ Url = KH_ANALYTICS_URL .. path, Method = "GET" })
+            if not res or not res.Body then return nil end
+            local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+            if ok then return data end
+            return nil
+        end
+
+        function KillerHub:GetActiveUsers()
+            if not isOwner then return nil end
+            return fetchJson("/stats?key=" .. KH_OWNER_KEY)
+        end
+
+        function KillerHub:GetUserList()
+            if not isOwner then return nil end
+            local data = fetchJson("/users?key=" .. KH_OWNER_KEY)
+            return data and data.users or nil
+        end
+
+        -- 3) Contador + panel con avatares: invisible para cualquiera que no seas tú
+        if isOwner then
+            task.spawn(function()
+                local sg = _G.__KillerHub_ScreenGui__
+                local main = sg and sg:FindFirstChild("MainFrame")
+                local topbar = main and main:FindFirstChildWhichIsA("Frame")
+                if not topbar then return end
+
+                local label = Instance.new("TextLabel")
+                label.Name = "KH_OwnerStats"
+                label.BackgroundTransparency = 1
+                label.Size = UDim2.new(0, 170, 0, 16)
+                label.Position = UDim2.new(1, -15, 1, -18)
+                label.AnchorPoint = Vector2.new(1, 1)
+                label.TextXAlignment = Enum.TextXAlignment.Right
+                label.Font = Enum.Font.GothamMedium
+                label.TextSize = 10
+                label.TextColor3 = CurrentTheme.ACCENT
+                label.Text = "👥 -- (clic para ver)"
+                label.Parent = topbar
+
+                local btn = Instance.new("TextButton")
+                btn.BackgroundTransparency = 1
+                btn.Text = ""
+                btn.Size = UDim2.new(1, 0, 1, 0)
+                btn.Parent = label
+
+                -- Panel flotante con la lista de usuarios
+                local panel = Instance.new("Frame")
+                panel.Name = "KH_OwnerPanel"
+                panel.Visible = false
+                panel.Size = UDim2.new(0, 320, 0, 340)
+                panel.Position = UDim2.new(0.5, -160, 0.5, -170)
+                panel.BackgroundColor3 = CurrentTheme.BACKGROUND or Color3.fromRGB(20, 20, 26)
+                panel.BorderSizePixel = 0
+                panel.ZIndex = 50
+                panel.Parent = sg
+                local pc = Instance.new("UICorner"); pc.CornerRadius = UDim.new(0, 10); pc.Parent = panel
+                local ps = Instance.new("UIStroke"); ps.Color = CurrentTheme.ACCENT; ps.Transparency = 0.5; ps.Parent = panel
+
+                local head = Instance.new("TextLabel")
+                head.BackgroundTransparency = 1
+                head.Size = UDim2.new(1, -40, 0, 34)
+                head.Position = UDim2.new(0, 12, 0, 4)
+                head.TextXAlignment = Enum.TextXAlignment.Left
+                head.Font = Enum.Font.GothamBold
+                head.TextSize = 13
+                head.TextColor3 = CurrentTheme.TEXT_WHITE
+                head.Text = "Usuarios de Killer Hub"
+                head.ZIndex = 51
+                head.Parent = panel
+
+                local close = Instance.new("TextButton")
+                close.Size = UDim2.new(0, 26, 0, 26)
+                close.Position = UDim2.new(1, -32, 0, 8)
+                close.BackgroundTransparency = 1
+                close.Text = "✕"
+                close.Font = Enum.Font.GothamBold
+                close.TextSize = 14
+                close.TextColor3 = CurrentTheme.TEXT_MUTED
+                close.ZIndex = 51
+                close.Parent = panel
+                close.MouseButton1Click:Connect(function() panel.Visible = false end)
+
+                local list = Instance.new("ScrollingFrame")
+                list.Size = UDim2.new(1, -16, 1, -46)
+                list.Position = UDim2.new(0, 8, 0, 40)
+                list.BackgroundTransparency = 1
+                list.BorderSizePixel = 0
+                list.ScrollBarThickness = 6
+                list.CanvasSize = UDim2.new(0, 0, 0, 0)
+                list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+                list.ZIndex = 51
+                list.Parent = panel
+                local ll = Instance.new("UIListLayout"); ll.Padding = UDim.new(0, 6); ll.Parent = list
+
+                local function refreshPanel()
+                    local users = KillerHub:GetUserList()
+                    if not users then return end
+                    for _, child in ipairs(list:GetChildren()) do
+                        if child:IsA("Frame") then child:Destroy() end
+                    end
+                    for _, u in ipairs(users) do
+                        local row = Instance.new("Frame")
+                        row.Size = UDim2.new(1, -8, 0, 46)
+                        row.BackgroundColor3 = CurrentTheme.CARD or Color3.fromRGB(32, 32, 40)
+                        row.BackgroundTransparency = 0.25
+                        row.BorderSizePixel = 0
+                        row.ZIndex = 52
+                        row.Parent = list
+                        local rc = Instance.new("UICorner"); rc.CornerRadius = UDim.new(0, 8); rc.Parent = row
+
+                        local img = Instance.new("ImageLabel")
+                        img.Size = UDim2.new(0, 34, 0, 34)
+                        img.Position = UDim2.new(0, 6, 0, 6)
+                        img.BackgroundTransparency = 1
+                        img.Image = ("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150"):format(tonumber(u.robloxUserId) or 0)
+                        img.ZIndex = 53
+                        img.Parent = row
+                        local ic = Instance.new("UICorner"); ic.CornerRadius = UDim.new(1, 0); ic.Parent = img
+
+                        local name = Instance.new("TextLabel")
+                        name.BackgroundTransparency = 1
+                        name.Size = UDim2.new(1, -50, 0, 16)
+                        name.Position = UDim2.new(0, 46, 0, 6)
+                        name.TextXAlignment = Enum.TextXAlignment.Left
+                        name.Font = Enum.Font.GothamBold
+                        name.TextSize = 12
+                        name.TextColor3 = u.online and (CurrentTheme.ACCENT) or CurrentTheme.TEXT_WHITE
+                        name.Text = ("%s (@%s)"):format(tostring(u.displayName or u.username), tostring(u.username))
+                        name.ZIndex = 53
+                        name.Parent = row
+
+                        local info = Instance.new("TextLabel")
+                        info.BackgroundTransparency = 1
+                        info.Size = UDim2.new(1, -50, 0, 14)
+                        info.Position = UDim2.new(0, 46, 0, 24)
+                        info.TextXAlignment = Enum.TextXAlignment.Left
+                        info.Font = Enum.Font.Gotham
+                        info.TextSize = 10
+                        info.TextColor3 = CurrentTheme.TEXT_MUTED
+                        info.Text = ("%s · %s · %s"):format(
+                            u.online and "En línea" or "Desconectado",
+                            tostring(u.executor or "?"),
+                            tostring(u.platform or "?"))
+                        info.ZIndex = 53
+                        info.Parent = row
+                    end
+                end
+
+                btn.MouseButton1Click:Connect(function()
+                    panel.Visible = not panel.Visible
+                    if panel.Visible then task.spawn(refreshPanel) end
+                end)
+
+                while label.Parent do
+                    local data = KillerHub:GetActiveUsers()
+                    if data then
+                        label.Text = ("👥 %s online · %s hoy"):format(
+                            tostring(data.online or "?"), tostring(data.today or "?"))
+                    end
+                    if panel.Visible then refreshPanel() end
+                    task.wait(30)
+                end
+            end)
+        end
+    end
+end
 
 return KillerHub
