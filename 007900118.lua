@@ -1,5 +1,5 @@
 -- ============================================================================
--- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.7.1)
+-- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.8.3)
 -- Changelog V5.7.1:
 --   • 🩹 Crear un shortcut con "UI optimization" ENCENDIDO ya no lo deja con el
 --     borde blanco ni con el degradado del modo animado congelado: nace plano y
@@ -1089,7 +1089,7 @@ local function updateGuiSize()
     end
 end
 
-local Topbar = create("Frame", {Size = UDim2.new(1, 0, 0, 45), BackgroundColor3 = Color3.fromRGB(3, 3, 4), BorderSizePixel = 0, Active = true, ClipsDescendants = true}, MainFrame)
+local Topbar = create("Frame", {Name = "Topbar", Size = UDim2.new(1, 0, 0, 45), BackgroundColor3 = Color3.fromRGB(3, 3, 4), BorderSizePixel = 0, Active = true, ClipsDescendants = true}, MainFrame)
 create("UICorner", {CornerRadius = UDim.new(0, 16)}, Topbar)
 
 local Title = create("TextLabel", {Size = UDim2.new(0, 250, 1, 0), Position = UDim2.new(0, 18, 0, 0), BackgroundTransparency = 1, Text = "Killer Hub | By Paolo", TextColor3 = CurrentTheme.TEXT_WHITE, TextXAlignment = Enum.TextXAlignment.Left, Font = Enum.Font.GothamBold, TextSize = 14}, Topbar)
@@ -6240,38 +6240,48 @@ end
 
 
 -- ============================================================================
--- 📡 V5.8.1 · KILLER HUB ANALYTICS + PANEL DE USUARIOS (SOLO EL DUEÑO)
+-- 📡 V5.8.4 · KILLER HUB ANALYTICS + PANEL DE USUARIOS (SOLO EL DUEÑO)
 -- ----------------------------------------------------------------------------
--- EN CRISTIANO:
---   1) Cada persona que ejecuta tu librería manda un "latido" a tu página web
---      cada 60 segundos con: su UserId, su nombre, su display name, su avatar,
---      su executor (Wave, Potassium...), si es PC o celular, y el juego.
---   2) Tu página web guarda eso. Si alguien no manda latido en 3 minutos, deja
---      de contar como "en línea".
---   3) Solo TU cuenta de Roblox ve el contador en la topbar y el panel con las
---      fotos. Para cualquier otra persona este bloque no crea NADA de UI.
---
--- CÓMO SE USA:
---   • Pon tu UserId de Roblox abajo en KH_OWNER_USERID.
---   • KH_ANALYTICS_URL ya viene puesta (tu página). Cuando publiques la web,
---     cambia "-dev" por la versión publicada.
---   • Panel web: abre la URL en el navegador y mete la clave KH_OWNER_KEY.
---   • Panel dentro del juego: haz clic en el contador "👥 ... online" de la
---     barra superior (solo aparece para ti).
+-- Cambios V5.8.4:
+--   • El panel abre y cierra con animación (escala + fade) y la fila del usuario
+--     despliega "Unirme" con rebote y fundido.
+--   • Ahora el panel se cierra con CUALQUIER tap: fuera, dentro del panel, en el
+--     hub o en el botón flotante. Solo se queda abierto si deslizas/scrolleas
+--     dentro del panel o si tocaste una fila o el botón "Unirme".
+--   • El ping rearma el payload cada vez: el jobId que guarda la web es el del
+--     servidor ACTUAL. Antes se serializaba al cargar el script, así que el
+--     panel podía tener un jobId viejo y "Unirme" te dejaba en un server random.
+--   • "Unirme" avisa cuando el usuario está desconectado o no reporta jobId
+--     (en esos casos Roblox no puede meterte a su servidor exacto).
+-- ----------------------------------------------------------------------------
+-- Cambios V5.8.2:
+--   • El contador ahora vive en la TOPBAR (pastilla al lado del FPS), con
+--     iconos de imagen en vez de emojis. Antes se colgaba del primer Frame que
+--     encontrara dentro del MainFrame (el fondo personalizado), por eso salía
+--     abajo a la derecha, casi invisible y sin recibir clics.
+--   • El panel abre de verdad: ZIndex por encima del hub y click garantizado.
+--   • Al tocar a un jugador se despliega "Join game" (TeleportToPlaceInstance).
+--   • Menos trabajo: el latido no re-crea el payload, las lecturas se detienen
+--     cuando el menú está cerrado o el panel no se ve, y las filas se reciclan
+--     en vez de destruirse y crearse de nuevo en cada refresco.
 -- ============================================================================
-local KH_OWNER_USERID  = 312419911   -- ← PON AQUÍ TU USERID DE ROBLOX (ej: 1234567890)
+do
+local KH_OWNER_USERID  = 312419911   -- ← TU USERID DE ROBLOX
 local KH_ANALYTICS_URL = "https://project--e9d15026-4081-4e74-a34f-79f6f3fea1cd-dev.lovable.app/api/public/kh"
 local KH_OWNER_KEY     = "killerhub-panel-2026"
 local KH_PING_INTERVAL = 60
-local KH_VERSION       = "5.8.1"
+local KH_VERSION       = "5.8.4"
 
-do
+local KH_ICON_USER  = "rbxassetid://81489458260315"
+local KH_ICON_CLOSE = "rbxassetid://82994774214203"
+
     if KH_ANALYTICS_URL ~= "" then
+        local httpReq = (syn and syn.request) or (http and http.request) or http_request
+            or (fluxus and fluxus.request) or request
+
         local function httpRequest(opts)
-            local req = (syn and syn.request) or (http and http.request) or http_request
-                or (fluxus and fluxus.request) or request
-            if typeof(req) ~= "function" then return nil end
-            local ok, res = pcall(req, opts)
+            if typeof(httpReq) ~= "function" then return nil end
+            local ok, res = pcall(httpReq, opts)
             if ok then return res end
             return nil
         end
@@ -6302,7 +6312,8 @@ do
         local function gameName()
             local name = "Juego " .. tostring(game.PlaceId)
             pcall(function()
-                local info = MarketplaceService and MarketplaceService:GetProductInfo(game.PlaceId)
+                local mps = game:GetService("MarketplaceService")
+                local info = mps and mps:GetProductInfo(game.PlaceId)
                 if info and info.Name then name = info.Name end
             end)
             return name
@@ -6311,43 +6322,57 @@ do
         local isOwner = (KH_OWNER_USERID ~= 0 and LocalPlayer and LocalPlayer.UserId == KH_OWNER_USERID)
         local uid = (LocalPlayer and LocalPlayer.UserId) or 0
         local payload
-        task.spawn(function()
-            payload = HttpService:JSONEncode({
-                userId      = uid,
-                username    = (LocalPlayer and LocalPlayer.Name) or "?",
-                displayName = (LocalPlayer and LocalPlayer.DisplayName) or "?",
-                avatarUrl   = ("https://www.roblox.com/headshot-thumbnail/image?userId=%d&width=150&height=150&format=png"):format(uid),
-                executor    = detectExecutor(),
-                platform    = detectPlatform(),
-                placeId     = tostring(game.PlaceId),
-                gameName    = gameName(),
-                version     = KH_VERSION,
-            })
-        end)
+        local cachedGameName
 
-        local function sendPing()
-            if not payload then return end
-            pcall(function()
-                httpRequest({
-                    Url = KH_ANALYTICS_URL .. "/ping",
-                    Method = "POST",
-                    Headers = { ["Content-Type"] = "application/json" },
-                    Body = payload,
+        -- El payload se REARMA en cada ping: si el jugador cambia de servidor
+        -- (o de juego) el jobId que ve el panel siempre es el de AHORA. Antes se
+        -- serializaba una sola vez al cargar, así que el panel guardaba un jobId
+        -- viejo/muerto y "Unirme" terminaba en un servidor aleatorio.
+        local function buildPayload()
+            if not cachedGameName then cachedGameName = gameName() end
+            local ok, encoded = pcall(function()
+                return HttpService:JSONEncode({
+                    userId      = uid,
+                    username    = (LocalPlayer and LocalPlayer.Name) or "?",
+                    displayName = (LocalPlayer and LocalPlayer.DisplayName) or "?",
+                    avatarUrl   = ("https://www.roblox.com/headshot-thumbnail/image?userId=%d&width=150&height=150&format=png"):format(uid),
+                    executor    = detectExecutor(),
+                    platform    = detectPlatform(),
+                    placeId     = tostring(game.PlaceId),
+                    jobId       = tostring(game.JobId or ""),
+                    gameName    = cachedGameName,
+                    version     = KH_VERSION,
                 })
             end)
+            if ok then payload = encoded end
+            return payload
         end
 
-        -- 1) Latido de presencia (lo manda todo el mundo, sin UI, en hilo aparte)
+        task.spawn(buildPayload)
+
+        local function sendPing()
+            if not buildPayload() then return end
+            httpRequest({
+                Url = KH_ANALYTICS_URL .. "/ping",
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = payload,
+            })
+        end
+
+        -- 1) Latido de presencia: todo el mundo, sin UI, en un hilo aparte.
         task.spawn(function()
-            repeat task.wait(0.5) until payload or _G.__KillerHub_Unloaded__
-            sendPing()
-            while task.wait(KH_PING_INTERVAL) ~= nil do
-                if _G.__KillerHub_Unloaded__ then break end
+            local waited = 0
+            while not payload and waited < 15 and not _G.__KillerHub_Unloaded__ do
+                waited = waited + task.wait(0.5)
+            end
+            while not _G.__KillerHub_Unloaded__ do
                 sendPing()
+                task.wait(KH_PING_INTERVAL)
             end
         end)
 
-        -- 2) Lectura de datos: SOLO el dueño
+        -- 2) Lectura de datos: SOLO el dueño.
         local function fetchJson(path)
             local res = httpRequest({ Url = KH_ANALYTICS_URL .. path, Method = "GET" })
             if not res or not res.Body then return nil end
@@ -6367,150 +6392,543 @@ do
             return data and data.users or nil
         end
 
-        -- 3) Contador + panel con avatares: invisible para cualquiera que no seas tú
+        -- 3) Contador + panel con avatares: nada de esto existe para los demás.
         if isOwner then
             task.spawn(function()
                 local sg = _G.__KillerHub_ScreenGui__
                 local main = sg and sg:FindFirstChild("MainFrame")
-                local topbar = main and main:FindFirstChildWhichIsA("Frame")
+                local topbar = main and (main:FindFirstChild("Topbar") or main:FindFirstChildWhichIsA("Frame"))
                 if not topbar then return end
 
-                local label = Instance.new("TextLabel")
-                label.Name = "KH_OwnerStats"
-                label.BackgroundTransparency = 1
-                label.Size = UDim2.new(0, 170, 0, 16)
-                label.Position = UDim2.new(1, -15, 1, -18)
-                label.AnchorPoint = Vector2.new(1, 1)
-                label.TextXAlignment = Enum.TextXAlignment.Right
-                label.Font = Enum.Font.GothamMedium
-                label.TextSize = 10
-                label.TextColor3 = CurrentTheme.ACCENT
-                label.Text = "👥 -- (clic para ver)"
-                label.Parent = topbar
+                local function theme(key, fallback)
+                    local c = CurrentTheme and CurrentTheme[key]
+                    return typeof(c) == "Color3" and c or fallback
+                end
 
-                local btn = Instance.new("TextButton")
-                btn.BackgroundTransparency = 1
-                btn.Text = ""
-                btn.Size = UDim2.new(1, 0, 1, 0)
-                btn.Parent = label
+                -- Sonido de la UI (el mismo de los toggles del hub).
+                local function click()
+                    if type(playUISound) == "function" then pcall(playUISound) end
+                end
 
-                -- Panel flotante con la lista de usuarios
+                -- Registro de piezas temáticas: repintar en caliente cuesta un
+                -- solo for por cambio de tema, cero trabajo por frame.
+                local themed = {}
+                local function paint(inst, prop, key, fallback)
+                    themed[#themed + 1] = { inst, prop, key, fallback }
+                    inst[prop] = theme(key, fallback)
+                    return inst
+                end
+                local function repaint()
+                    for i = #themed, 1, -1 do
+                        local t = themed[i]
+                        if t[1].Parent then
+                            pcall(function() t[1][t[2]] = theme(t[3], t[4]) end)
+                        else
+                            table.remove(themed, i)
+                        end
+                    end
+                end
+
+                -- ---------- Pastilla del contador (topbar, junto al FPS) ----------
+                local pill = Instance.new("TextButton")
+                pill.Name = "KH_OwnerStats"
+                pill.AutoButtonColor = false
+                pill.Text = ""
+                pill.Size = UDim2.new(0, 150, 0, 26)
+                pill.Position = UDim2.new(1, -185, 0.5, 0)
+                pill.AnchorPoint = Vector2.new(1, 0.5)
+                pill.BackgroundTransparency = 0.15
+                pill.BorderSizePixel = 0
+                pill.ZIndex = 20
+                pill.Parent = topbar
+                paint(pill, "BackgroundColor3", "BG_SECONDARY", Color3.fromRGB(24, 24, 30))
+                Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+                local pillStroke = Instance.new("UIStroke", pill)
+                pillStroke.Transparency = 0.45
+                paint(pillStroke, "Color", "ACCENT", Color3.fromRGB(255, 60, 60))
+
+                local pillIcon = Instance.new("ImageLabel")
+                pillIcon.BackgroundTransparency = 1
+                pillIcon.Image = KH_ICON_USER
+                pillIcon.Size = UDim2.new(0, 14, 0, 14)
+                pillIcon.Position = UDim2.new(0, 10, 0.5, 0)
+                pillIcon.AnchorPoint = Vector2.new(0, 0.5)
+                pillIcon.ZIndex = 21
+                pillIcon.Parent = pill
+                paint(pillIcon, "ImageColor3", "ACCENT", Color3.fromRGB(255, 60, 60))
+
+                local pillText = Instance.new("TextLabel")
+                pillText.BackgroundTransparency = 1
+                pillText.Size = UDim2.new(1, -34, 1, 0)
+                pillText.Position = UDim2.new(0, 30, 0, 0)
+                pillText.TextXAlignment = Enum.TextXAlignment.Left
+                pillText.Font = Enum.Font.GothamBold
+                pillText.TextSize = 11
+                pillText.Text = "-- online · -- hoy"
+                pillText.ZIndex = 21
+                pillText.Parent = pill
+                paint(pillText, "TextColor3", "TEXT_WHITE", Color3.new(1, 1, 1))
+
+                -- ---------- Panel de usuarios ----------
                 local panel = Instance.new("Frame")
                 panel.Name = "KH_OwnerPanel"
                 panel.Visible = false
-                panel.Size = UDim2.new(0, 320, 0, 340)
-                panel.Position = UDim2.new(0.5, -160, 0.5, -170)
-                panel.BackgroundColor3 = CurrentTheme.BACKGROUND or Color3.fromRGB(20, 20, 26)
+                panel.Active = true
+                panel.Size = UDim2.new(0, 330, 0, 360)
+                panel.Position = UDim2.new(0.5, -165, 0.5, -180)
                 panel.BorderSizePixel = 0
-                panel.ZIndex = 50
+                panel.ZIndex = 500
                 panel.Parent = sg
-                local pc = Instance.new("UICorner"); pc.CornerRadius = UDim.new(0, 10); pc.Parent = panel
-                local ps = Instance.new("UIStroke"); ps.Color = CurrentTheme.ACCENT; ps.Transparency = 0.5; ps.Parent = panel
+                paint(panel, "BackgroundColor3", "BG_MAIN", Color3.fromRGB(14, 12, 18))
+                Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 12)
+                local panelStroke = Instance.new("UIStroke", panel)
+                panelStroke.Transparency = 0.4
+                paint(panelStroke, "Color", "ACCENT", Color3.fromRGB(255, 60, 60))
+
+                local headBar = Instance.new("Frame")
+                headBar.Size = UDim2.new(1, 0, 0, 40)
+                headBar.BackgroundTransparency = 1
+                headBar.Active = true
+                headBar.ZIndex = 501
+                headBar.Parent = panel
+
+                local headIcon = Instance.new("ImageLabel")
+                headIcon.BackgroundTransparency = 1
+                headIcon.Image = KH_ICON_USER
+                headIcon.Size = UDim2.new(0, 16, 0, 16)
+                headIcon.Position = UDim2.new(0, 14, 0.5, 0)
+                headIcon.AnchorPoint = Vector2.new(0, 0.5)
+                headIcon.ZIndex = 502
+                headIcon.Parent = headBar
+                paint(headIcon, "ImageColor3", "ACCENT", Color3.fromRGB(255, 60, 60))
 
                 local head = Instance.new("TextLabel")
                 head.BackgroundTransparency = 1
-                head.Size = UDim2.new(1, -40, 0, 34)
-                head.Position = UDim2.new(0, 12, 0, 4)
+                head.Size = UDim2.new(1, -80, 1, 0)
+                head.Position = UDim2.new(0, 38, 0, 0)
                 head.TextXAlignment = Enum.TextXAlignment.Left
                 head.Font = Enum.Font.GothamBold
                 head.TextSize = 13
-                head.TextColor3 = CurrentTheme.TEXT_WHITE
                 head.Text = "Usuarios de Killer Hub"
-                head.ZIndex = 51
-                head.Parent = panel
+                head.ZIndex = 502
+                head.Parent = headBar
+                paint(head, "TextColor3", "TEXT_WHITE", Color3.new(1, 1, 1))
 
-                local close = Instance.new("TextButton")
-                close.Size = UDim2.new(0, 26, 0, 26)
-                close.Position = UDim2.new(1, -32, 0, 8)
+                local close = Instance.new("ImageButton")
+                close.Size = UDim2.new(0, 16, 0, 16)
+                close.Position = UDim2.new(1, -16, 0.5, 0)
+                close.AnchorPoint = Vector2.new(1, 0.5)
                 close.BackgroundTransparency = 1
-                close.Text = "✕"
-                close.Font = Enum.Font.GothamBold
-                close.TextSize = 14
-                close.TextColor3 = CurrentTheme.TEXT_MUTED
-                close.ZIndex = 51
-                close.Parent = panel
-                close.MouseButton1Click:Connect(function() panel.Visible = false end)
+                close.Image = KH_ICON_CLOSE
+                close.ZIndex = 503
+                close.Parent = headBar
+                paint(close, "ImageColor3", "TEXT_MUTED", Color3.fromRGB(150, 150, 160))
+
+                if type(makeDraggable) == "function" then
+                    pcall(makeDraggable, headBar, panel)
+                end
 
                 local list = Instance.new("ScrollingFrame")
-                list.Size = UDim2.new(1, -16, 1, -46)
-                list.Position = UDim2.new(0, 8, 0, 40)
+                list.Size = UDim2.new(1, -16, 1, -50)
+                list.Position = UDim2.new(0, 8, 0, 44)
                 list.BackgroundTransparency = 1
                 list.BorderSizePixel = 0
-                list.ScrollBarThickness = 6
+                list.ScrollBarThickness = 4
                 list.CanvasSize = UDim2.new(0, 0, 0, 0)
                 list.AutomaticCanvasSize = Enum.AutomaticSize.Y
-                list.ZIndex = 51
+                list.ZIndex = 501
                 list.Parent = panel
-                local ll = Instance.new("UIListLayout"); ll.Padding = UDim.new(0, 6); ll.Parent = list
+                paint(list, "ScrollBarImageColor3", "ACCENT", Color3.fromRGB(255, 60, 60))
+                local ll = Instance.new("UIListLayout", list)
+                ll.Padding = UDim.new(0, 6)
+                ll.SortOrder = Enum.SortOrder.LayoutOrder
+
+                local empty = Instance.new("TextLabel")
+                empty.BackgroundTransparency = 1
+                empty.Size = UDim2.new(1, 0, 0, 40)
+                empty.Font = Enum.Font.Gotham
+                empty.TextSize = 11
+                empty.Text = "Cargando usuarios..."
+                empty.ZIndex = 502
+                empty.Parent = panel
+                empty.Position = UDim2.new(0, 0, 0, 60)
+                paint(empty, "TextColor3", "TEXT_MUTED", Color3.fromRGB(150, 150, 160))
+
+                -- ---------- Animaciones compartidas ----------
+                local TweenService = game:GetService("TweenService")
+                local function animOff()
+                    -- Respeta el interruptor "UI optimization" del hub.
+                    local s = rawget(_G, "UI_OPTIMIZATION")
+                    if s ~= nil then return s and true or false end
+                    if type(Settings) == "table" and Settings.UIOptimization ~= nil then
+                        return Settings.UIOptimization and true or false
+                    end
+                    return false
+                end
+                local function tween(inst, time, props, style, dir)
+                    if not inst or not inst.Parent then return end
+                    if animOff() then
+                        for k, v in pairs(props) do pcall(function() inst[k] = v end) end
+                        return
+                    end
+                    local info = TweenInfo.new(time, style or Enum.EasingStyle.Quart, dir or Enum.EasingDirection.Out)
+                    local ok, t = pcall(function() return TweenService:Create(inst, info, props) end)
+                    if ok and t then t:Play() end
+                end
+
+                -- Cuando el usuario interactúa con algo del panel (fila, botón
+                -- Unirme) no queremos que ese mismo tap lo cierre.
+                local keepUntil = 0
+                local function keepPanelOpen() keepUntil = os.clock() + 0.35 end
+
+                -- ---------- Unirme al servidor donde está el usuario ----------
+                local TeleportService = game:GetService("TeleportService")
+                local teleporting = false
+
+                local function notify(title, msg)
+                    if KillerHub and KillerHub.Notify then
+                        pcall(function() KillerHub:Notify(title, msg, 4) end)
+                    end
+                end
+
+                local function joinUser(u)
+                    if teleporting then return end
+                    local placeId = tonumber(u.placeId)
+                    local jobId = tostring(u.jobId or "")
+                    if not placeId or placeId <= 0 then
+                        notify("Unirme", "Ese usuario no reporta el juego (placeId).")
+                        return
+                    end
+                    if jobId ~= "" and jobId == tostring(game.JobId) then
+                        notify("Unirme", "Ya estás en ese mismo servidor.")
+                        return
+                    end
+
+                    teleporting = true
+                    if jobId == "" then
+                        notify("Unirme", "Ese usuario no reporta servidor (jobId): Roblox te va a poner en un servidor cualquiera del juego.")
+                    elseif not u.online then
+                        notify("Unirme", "Ese usuario está desconectado: su servidor puede haber cerrado y Roblox te mandaría a otro. Intentando igual...")
+                    else
+                        notify("Unirme", "Entrando al servidor del usuario...")
+                    end
+
+                    local failConn
+                    failConn = TeleportService.TeleportInitFailed:Connect(function(_, result, err)
+                        teleporting = false
+                        if failConn then failConn:Disconnect() failConn = nil end
+                        local reason = tostring(err or "")
+                        if result == Enum.TeleportResult.GameEnded or result == Enum.TeleportResult.GameFull then
+                            reason = "El servidor ya cerró o está lleno."
+                        elseif result == Enum.TeleportResult.Unauthorized or result == Enum.TeleportResult.Flooded then
+                            reason = "No se permite entrar (servidor privado o límite de teletransportes)."
+                        end
+                        notify("No pude unirme", reason ~= "" and reason or "Roblox rechazó el teletransporte.")
+                    end)
+                    task.delay(12, function()
+                        teleporting = false
+                        if failConn then failConn:Disconnect() failConn = nil end
+                    end)
+
+                    task.spawn(function()
+                        local ok = false
+                        if jobId ~= "" then
+                            ok = pcall(function()
+                                local opts = Instance.new("TeleportOptions")
+                                opts.ServerInstanceId = jobId
+                                TeleportService:Teleport(placeId, LocalPlayer, nil, opts)
+                            end)
+                            if not ok then
+                                ok = pcall(function()
+                                    TeleportService:TeleportToPlaceInstance(placeId, jobId, LocalPlayer)
+                                end)
+                            end
+                        else
+                            ok = pcall(function()
+                                TeleportService:Teleport(placeId, LocalPlayer)
+                            end)
+                        end
+                        if not ok then
+                            teleporting = false
+                            if failConn then failConn:Disconnect() failConn = nil end
+                            notify("No pude unirme", "Tu ejecutor bloqueó el teletransporte.")
+                        end
+                    end)
+                end
+
+                -- Filas recicladas: nunca se destruyen mientras el panel viva.
+                local rows = {}
+                local function getRow(i)
+                    local r = rows[i]
+                    if r then return r end
+
+                    local row = Instance.new("Frame")
+                    row.Size = UDim2.new(1, -8, 0, 50)
+                    row.BackgroundTransparency = 0.2
+                    row.BorderSizePixel = 0
+                    row.ClipsDescendants = true
+                    row.LayoutOrder = i
+                    row.ZIndex = 502
+                    row.Parent = list
+                    paint(row, "BackgroundColor3", "BG_SECONDARY", Color3.fromRGB(32, 32, 40))
+                    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+
+                    local hit = Instance.new("TextButton")
+                    hit.BackgroundTransparency = 1
+                    hit.Text = ""
+                    hit.Size = UDim2.new(1, 0, 0, 50)
+                    hit.ZIndex = 503
+                    hit.Parent = row
+
+                    local img = Instance.new("ImageLabel")
+                    img.Size = UDim2.new(0, 36, 0, 36)
+                    img.Position = UDim2.new(0, 7, 0, 7)
+                    img.BackgroundTransparency = 1
+                    img.ZIndex = 504
+                    img.Parent = row
+                    Instance.new("UICorner", img).CornerRadius = UDim.new(1, 0)
+
+                    local name = Instance.new("TextLabel")
+                    name.BackgroundTransparency = 1
+                    name.Size = UDim2.new(1, -56, 0, 16)
+                    name.Position = UDim2.new(0, 50, 0, 8)
+                    name.TextXAlignment = Enum.TextXAlignment.Left
+                    name.TextTruncate = Enum.TextTruncate.AtEnd
+                    name.Font = Enum.Font.GothamBold
+                    name.TextSize = 12
+                    name.ZIndex = 504
+                    name.Parent = row
+
+                    local info = Instance.new("TextLabel")
+                    info.BackgroundTransparency = 1
+                    info.Size = UDim2.new(1, -56, 0, 14)
+                    info.Position = UDim2.new(0, 50, 0, 26)
+                    info.TextXAlignment = Enum.TextXAlignment.Left
+                    info.TextTruncate = Enum.TextTruncate.AtEnd
+                    info.Font = Enum.Font.Gotham
+                    info.TextSize = 10
+                    info.ZIndex = 504
+                    info.Parent = row
+                    paint(info, "TextColor3", "TEXT_MUTED", Color3.fromRGB(150, 150, 160))
+
+                    local join = Instance.new("TextButton")
+                    join.Size = UDim2.new(1, -14, 0, 26)
+                    join.Position = UDim2.new(0, 7, 0, 54)
+                    join.BackgroundTransparency = 0.15
+                    join.BorderSizePixel = 0
+                    join.AutoButtonColor = false
+                    join.Font = Enum.Font.GothamBold
+                    join.TextSize = 11
+                    join.TextColor3 = Color3.new(1, 1, 1)
+                    join.Text = "Unirme a su servidor"
+                    join.ZIndex = 504
+                    join.Parent = row
+                    paint(join, "BackgroundColor3", "ACCENT", Color3.fromRGB(255, 60, 60))
+                    Instance.new("UICorner", join).CornerRadius = UDim.new(0, 6)
+
+                    join.BackgroundTransparency = 1
+                    join.TextTransparency = 1
+
+                    local r2 = { frame = row, img = img, name = name, info = info, join = join, open = false, data = nil }
+                    hit.MouseButton1Click:Connect(function()
+                        click()
+                        keepPanelOpen()
+                        r2.open = not r2.open
+                        tween(row, 0.22, { Size = UDim2.new(1, -8, 0, r2.open and 86 or 50) },
+                            Enum.EasingStyle.Back, r2.open and Enum.EasingDirection.Out or Enum.EasingDirection.In)
+                        tween(join, 0.18, {
+                            BackgroundTransparency = r2.open and 0.15 or 1,
+                            TextTransparency = r2.open and 0 or 1,
+                        })
+                        tween(join, 0.18, { Position = UDim2.new(0, 7, 0, r2.open and 54 or 50) })
+                    end)
+                    hit.MouseButton1Down:Connect(keepPanelOpen)
+                    join.MouseButton1Down:Connect(keepPanelOpen)
+                    join.MouseButton1Click:Connect(function()
+                        click()
+                        keepPanelOpen()
+                        if r2.data then joinUser(r2.data) end
+                    end)
+                    rows[i] = r2
+                    return r2
+                end
 
                 local function refreshPanel()
                     local users = KillerHub:GetUserList()
-                    if not users then return end
-                    for _, child in ipairs(list:GetChildren()) do
-                        if child:IsA("Frame") then child:Destroy() end
+                    if not users then
+                        empty.Text = "No pude leer la web (revisa la URL/clave)."
+                        empty.Visible = true
+                        return
                     end
-                    for _, u in ipairs(users) do
-                        local row = Instance.new("Frame")
-                        row.Size = UDim2.new(1, -8, 0, 46)
-                        row.BackgroundColor3 = CurrentTheme.CARD or Color3.fromRGB(32, 32, 40)
-                        row.BackgroundTransparency = 0.25
-                        row.BorderSizePixel = 0
-                        row.ZIndex = 52
-                        row.Parent = list
-                        local rc = Instance.new("UICorner"); rc.CornerRadius = UDim.new(0, 8); rc.Parent = row
+                    empty.Visible = (#users == 0)
+                    if #users == 0 then empty.Text = "Todavía no hay usuarios." end
 
-                        local img = Instance.new("ImageLabel")
-                        img.Size = UDim2.new(0, 34, 0, 34)
-                        img.Position = UDim2.new(0, 6, 0, 6)
-                        img.BackgroundTransparency = 1
-                        img.Image = ("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150"):format(tonumber(u.robloxUserId) or 0)
-                        img.ZIndex = 53
-                        img.Parent = row
-                        local ic = Instance.new("UICorner"); ic.CornerRadius = UDim.new(1, 0); ic.Parent = img
-
-                        local name = Instance.new("TextLabel")
-                        name.BackgroundTransparency = 1
-                        name.Size = UDim2.new(1, -50, 0, 16)
-                        name.Position = UDim2.new(0, 46, 0, 6)
-                        name.TextXAlignment = Enum.TextXAlignment.Left
-                        name.Font = Enum.Font.GothamBold
-                        name.TextSize = 12
-                        name.TextColor3 = u.online and (CurrentTheme.ACCENT) or CurrentTheme.TEXT_WHITE
-                        name.Text = ("%s (@%s)"):format(tostring(u.displayName or u.username), tostring(u.username))
-                        name.ZIndex = 53
-                        name.Parent = row
-
-                        local info = Instance.new("TextLabel")
-                        info.BackgroundTransparency = 1
-                        info.Size = UDim2.new(1, -50, 0, 14)
-                        info.Position = UDim2.new(0, 46, 0, 24)
-                        info.TextXAlignment = Enum.TextXAlignment.Left
-                        info.Font = Enum.Font.Gotham
-                        info.TextSize = 10
-                        info.TextColor3 = CurrentTheme.TEXT_MUTED
-                        info.Text = ("%s · %s · %s"):format(
+                    for i, u in ipairs(users) do
+                        local r = getRow(i)
+                        r.data = u
+                        r.frame.Visible = true
+                        local id = tonumber(u.robloxUserId or u.userId) or 0
+                        local newImg = ("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150"):format(id)
+                        if r.img.Image ~= newImg then r.img.Image = newImg end
+                        r.name.Text = ("%s (@%s)"):format(tostring(u.displayName or u.username or "?"), tostring(u.username or "?"))
+                        r.name.TextColor3 = u.online and theme("ACCENT", Color3.fromRGB(255, 60, 60))
+                            or theme("TEXT_WHITE", Color3.new(1, 1, 1))
+                        r.info.Text = ("%s · %s · %s"):format(
                             u.online and "En línea" or "Desconectado",
                             tostring(u.executor or "?"),
-                            tostring(u.platform or "?"))
-                        info.ZIndex = 53
-                        info.Parent = row
+                            tostring(u.gameName or u.platform or "?"))
+                        r.join.Text = (tostring(u.jobId or "") ~= "")
+                            and "Unirme a su servidor" or "Unirme a su juego"
+                    end
+                    for i = #users + 1, #rows do
+                        rows[i].frame.Visible = false
+                        rows[i].data = nil
                     end
                 end
 
-                btn.MouseButton1Click:Connect(function()
-                    panel.Visible = not panel.Visible
-                    if panel.Visible then task.spawn(refreshPanel) end
+                -- ---------- Cerrar tocando fuera del panel ----------
+                local outsideConn
+                local function inside(gui, pos)
+                    local p, s = gui.AbsolutePosition, gui.AbsoluteSize
+                    return pos.X >= p.X and pos.X <= p.X + s.X
+                        and pos.Y >= p.Y and pos.Y <= p.Y + s.Y
+                end
+
+                local OPEN_SIZE = panel.Size
+                local OPEN_POS  = panel.Position
+                local panelOpen = false
+                local animToken = 0
+
+                local setPanelVisible
+                setPanelVisible = function(state)
+                    if panelOpen == state then return end
+                    panelOpen = state
+                    animToken = animToken + 1
+                    local token = animToken
+
+                    if state then
+                        OPEN_POS = panel.Position
+                        empty.Text = "Cargando usuarios..."
+                        empty.Visible = true
+                        -- Nace pequeño y transparente, y crece con rebote.
+                        panel.Size = UDim2.new(OPEN_SIZE.X.Scale, math.floor(OPEN_SIZE.X.Offset * 0.86),
+                                               OPEN_SIZE.Y.Scale, math.floor(OPEN_SIZE.Y.Offset * 0.86))
+                        panel.BackgroundTransparency = 1
+                        panelStroke.Transparency = 1
+                        panel.Visible = true
+                        tween(panel, 0.26, { Size = OPEN_SIZE, BackgroundTransparency = 0 },
+                            Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+                        tween(panelStroke, 0.26, { Transparency = 0.4 })
+                        task.spawn(refreshPanel)
+
+                        if not outsideConn then
+                            -- Cierra con CUALQUIER tap (fuera, dentro del panel,
+                            -- en el hub o en el botón flotante). Solo sobrevive si
+                            -- el gesto se convierte en arrastre/scroll dentro del
+                            -- panel, o si tocaste una fila / "Unirme".
+                            outsideConn = UserInputService.InputBegan:Connect(function(input)
+                                if input.UserInputType ~= Enum.UserInputType.MouseButton1
+                                    and input.UserInputType ~= Enum.UserInputType.Touch then return end
+                                local startPos = input.Position
+                                local startedInside = inside(panel, startPos)
+                                task.spawn(function()
+                                    local dragged = false
+                                    while input.UserInputState ~= Enum.UserInputState.End do
+                                        local d = (input.Position - startPos)
+                                        if math.abs(d.X) > 8 or math.abs(d.Y) > 8 then
+                                            dragged = true
+                                            if startedInside then break end
+                                        end
+                                        task.wait(0.03)
+                                    end
+                                    if not panelOpen then return end
+                                    if dragged and startedInside then return end   -- deslizando/scroll dentro
+                                    if os.clock() < keepUntil then return end      -- tocó fila o "Unirme"
+                                    setPanelVisible(false)
+                                end)
+                            end)
+                        end
+                    else
+                        if outsideConn then
+                            outsideConn:Disconnect()
+                            outsideConn = nil
+                        end
+                        tween(panel, 0.16, {
+                            Size = UDim2.new(OPEN_SIZE.X.Scale, math.floor(OPEN_SIZE.X.Offset * 0.9),
+                                             OPEN_SIZE.Y.Scale, math.floor(OPEN_SIZE.Y.Offset * 0.9)),
+                            BackgroundTransparency = 1,
+                        }, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+                        tween(panelStroke, 0.16, { Transparency = 1 })
+                        task.delay(animOff() and 0 or 0.18, function()
+                            if token == animToken and not panelOpen then
+                                panel.Visible = false
+                                panel.Size = OPEN_SIZE
+                                panel.Position = OPEN_POS
+                                panel.BackgroundTransparency = 0
+                                panelStroke.Transparency = 0.4
+                            end
+                        end)
+                    end
+                end
+
+                close.MouseButton1Click:Connect(function()
+                    click()
+                    setPanelVisible(false)
                 end)
 
-                while label.Parent do
-                    local data = KillerHub:GetActiveUsers()
-                    if data then
-                        label.Text = ("👥 %s online · %s hoy"):format(
-                            tostring(data.online or "?"), tostring(data.today or "?"))
-                    end
-                    if panel.Visible then refreshPanel() end
-                    task.wait(30)
+                pill.MouseButton1Down:Connect(keepPanelOpen)
+                pill.MouseButton1Click:Connect(function()
+                    click()
+                    keepPanelOpen()
+                    setPanelVisible(not panelOpen)
+                end)
+
+                -- ---------- Tema en tiempo real ----------
+                if KillerHub.ThemeChanged then
+                    pcall(function()
+                        KillerHub.ThemeChanged:Connect(function()
+                            repaint()
+                            if panelOpen then
+                                for _, r in ipairs(rows) do
+                                    if r.data then
+                                        r.name.TextColor3 = r.data.online
+                                            and theme("ACCENT", Color3.fromRGB(255, 60, 60))
+                                            or theme("TEXT_WHITE", Color3.new(1, 1, 1))
+                                    end
+                                end
+                            end
+                        end)
+                    end)
                 end
+                -- Respaldo barato: si el hub cambia de tema por otra vía, se
+                -- detecta comparando la tabla del tema (una comparación cada 2 s).
+                task.spawn(function()
+                    local last = CurrentTheme
+                    while pill.Parent and not _G.__KillerHub_Unloaded__ do
+                        if CurrentTheme ~= last then
+                            last = CurrentTheme
+                            repaint()
+                        end
+                        task.wait(2)
+                    end
+                end)
+
+                -- Bucle ligero: solo pide datos cuando hay algo que mostrar.
+                task.spawn(function()
+                    while pill.Parent and not _G.__KillerHub_Unloaded__ do
+                        if panelOpen then
+                            refreshPanel()
+                        end
+                        if pill.Visible and (not main or main.Visible) then
+                            local data = KillerHub:GetActiveUsers()
+                            if data then
+                                pillText.Text = ("%s online · %s hoy"):format(
+                                    tostring(data.online or "?"), tostring(data.today or "?"))
+                            end
+                        end
+                        task.wait(panelOpen and 20 or 60)
+                    end
+                end)
             end)
         end
     end
