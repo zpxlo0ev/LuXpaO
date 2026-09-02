@@ -1,5 +1,31 @@
 -- ============================================================================
--- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.0)
+-- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.1)
+-- Changelog V5.9.1 (compatibilidad + rendimiento):
+--   • 🖥 SOPORTE UNIVERSAL DE EJECUTORES (PC / Android / iOS). El error
+--     "no se puede cargar la UI library" en PC venía de 4 puntos que NO
+--     estaban blindados y tiraban el script antes de dibujar nada:
+--       1. Players.LocalPlayer podía ser nil (los executors de PC inyectan
+--          antes de que el jugador exista) → ahora se espera de verdad.
+--       2. Workspace.CurrentCamera nil en la misma ventana → también se espera.
+--       3. ScreenGui.ScreenInsets / propiedades nuevas no existen en clientes
+--          o executors viejos → create() ahora asigna propiedad por propiedad
+--          si la asignación en bloque falla, en vez de morir.
+--       4. getgenv() / getfenv() no existen en todos los executors y se
+--          llamaban sin protección → ahora pasan por KH_ENV (con _G de
+--          respaldo).
+--     Además el ScreenGui se protege con syn.protect_gui / protectgui /
+--     gethui cuando existen, y si CoreGui está bloqueado cae solo a PlayerGui.
+--   • ⚡ RENDIMIENTO: el contador de FPS ya no toca Stats con el menú cerrado,
+--     el "engrosar scrollbars" de PC dejó de crear una tarea diferida por CADA
+--     descendiente creado (era un pico de lag al abrir el hub con muchos
+--     widgets), y el cierre del panel privado dejó de usar un bucle
+--     task.wait(0.03) por cada toque de pantalla (ahora es por evento).
+--   • 🎬 El panel privado de usuarios (solo el dueño) abre y cierra AL
+--     INSTANTE, sin tween de escala/fade. El resto de animaciones del hub
+--     quedan intactas.
+--   • 🩹 El panel privado ya no hace peticiones HTTP cuando el hub está
+--     cerrado, y sus bucles mueren solos al descargar el hub.
+-- Changelog V5.9.0:
 -- Changelog V5.7.1:
 --   • 🩹 Crear un shortcut con "UI optimization" ENCENDIDO ya no lo deja con el
 --     borde blanco ni con el degradado del modo animado congelado: nace plano y
@@ -167,8 +193,113 @@ local Workspace = game:GetService("Workspace")
 local Stats = game:GetService("Stats")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
+-- 🧩 V5.9.1 · Arranque blindado para executors de PC (Wave, Solara, Swift,
+-- Xeno, Potassium...) que inyectan el script ANTES de que exista el jugador o
+-- la cámara. Antes esto reventaba con "attempt to index nil" y el usuario solo
+-- veía "no se puede cargar la UI library".
 local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    pcall(function()
+        local t0 = os.clock()
+        while not Players.LocalPlayer and (os.clock() - t0) < 20 do task.wait(0.1) end
+    end)
+    LocalPlayer = Players.LocalPlayer
+end
+if not LocalPlayer then
+    warn("[KillerHub] No se pudo obtener LocalPlayer (ejecuta el script ya dentro del juego).")
+    return {}
+end
 local Camera = Workspace.CurrentCamera
+if not Camera then
+    pcall(function()
+        local t0 = os.clock()
+        while not Workspace.CurrentCamera and (os.clock() - t0) < 10 do task.wait(0.1) end
+    end)
+    Camera = Workspace.CurrentCamera or Workspace:FindFirstChildWhichIsA("Camera")
+end
+
+-- 🧩 CAPA DE COMPATIBILIDAD DE EJECUTOR (PC / Android / iOS).
+-- Vive en _G (no como locals) porque el chunk principal ya está al tope de las
+-- 200 variables locales que permite Luau.
+_G.__KH_ENV = _G.__KH_ENV or {}
+do
+    local E = _G.__KH_ENV
+    -- Entorno global compartido: getgenv() en executors que lo tengan, _G si no.
+    function E.genv()
+        local ok, env = pcall(function()
+            local f = rawget(_G, "getgenv") or (type(getgenv) == "function" and getgenv or nil)
+            return f and f() or nil
+        end)
+        if ok and type(env) == "table" then return env end
+        return _G
+    end
+    -- Lectura segura de un global del executor (getfenv puede no existir).
+    function E.g(name)
+        local v = rawget(_G, name)
+        if v ~= nil then return v end
+        local ok, res = pcall(function() return rawget(getfenv(), name) end)
+        if ok and res ~= nil then return res end
+        local ok2, res2 = pcall(function() return _G[name] end)
+        if ok2 then return res2 end
+        return nil
+    end
+    -- Petición HTTP unificada: cubre Synapse, Fluxus, Krnl, Wave, Delta,
+    -- Codex, Hydrogen, Arceus, Solara, Xeno, Swift, Trigon...
+    function E.requestFn()
+        local cands = {}
+        local function add(v) if type(v) == "function" then cands[#cands + 1] = v end end
+        pcall(function() add(syn and syn.request) end)
+        pcall(function() add(http and http.request) end)
+        pcall(function() add(fluxus and fluxus.request) end)
+        add(E.g("http_request"))
+        add(E.g("request"))
+        return cands
+    end
+    -- Protección del ScreenGui (evita que el juego lo detecte/borre).
+    function E.protect(gui)
+        pcall(function() if syn and syn.protect_gui then syn.protect_gui(gui) end end)
+        pcall(function()
+            local f = E.g("protectgui") or E.g("protect_gui")
+            if type(f) == "function" then f(gui) end
+        end)
+    end
+    -- Plataforma: PC / Android / iOS / Consola.
+    function E.platform()
+        local touch, kb, gamepad, accel = false, false, false, false
+        pcall(function()
+            touch = UserInputService.TouchEnabled
+            kb = UserInputService.KeyboardEnabled
+            gamepad = UserInputService.GamepadEnabled
+            accel = UserInputService.AccelerometerEnabled
+        end)
+        if kb and not touch then return "PC" end
+        if touch and not kb then
+            -- iOS no expone acelerómetro de la misma forma que Android en
+            -- todos los clientes; usamos la relación de pantalla como pista.
+            local ios = false
+            pcall(function() ios = (UserInputService:GetPlatform() == Enum.Platform.IOS) end)
+            if ios then return "iOS" end
+            local android = false
+            pcall(function() android = (UserInputService:GetPlatform() == Enum.Platform.Android) end)
+            if android then return "Android" end
+            return accel and "Android" or "Móvil"
+        end
+        if gamepad and not touch and not kb then return "Consola" end
+        return "Desconocido"
+    end
+    function E.executor()
+        local name
+        pcall(function()
+            local f = E.g("identifyexecutor") or E.g("getexecutorname")
+            if type(f) == "function" then name = f() end
+        end)
+        if type(name) == "string" and name ~= "" then return name end
+        if rawget(_G, "syn") then return "Synapse" end
+        if rawget(_G, "fluxus") then return "Fluxus" end
+        if rawget(_G, "KRNL_LOADED") then return "Krnl" end
+        return "desconocido"
+    end
+end
 
 -- ⚡ FAST-PATH LOCALS (caché de funciones matemáticas/color de uso frecuente en Luau,
 -- evita resoluciones de tabla globales repetidas durante el arrastre del Color Picker)
@@ -239,21 +370,41 @@ end
 
 
 -- 🛠 ANTI-CRASH UNIVERSAL INTEGRADO (GetSafeUIParent)
+-- 🧩 V5.9.1: se prueban en orden gethui() → CoreGui (con prueba real de
+-- escritura) → PlayerGui. En varios executors de PC, CoreGui existe pero
+-- parentar ahí lanza error de permisos: antes eso mataba la carga del hub.
 local function GetSafeUIParent()
-    local success, result = pcall(function()
-        if gethui then return gethui() end
-        local coreGui = game:GetService("CoreGui")
-        if coreGui and coreGui.Name then return coreGui end
+    local ok, hui = pcall(function()
+        local f = _G.__KH_ENV.g("gethui")
+        return type(f) == "function" and f() or nil
     end)
-    if success and result then return result end
+    if ok and hui then return hui end
+
+    local okCore, core = pcall(function()
+        local cg = game:GetService("CoreGui")
+        -- Prueba de escritura: si no tenemos permiso, esto falla aquí y no
+        -- más adelante (cuando ya sería un crash visible).
+        local probe = Instance.new("Folder")
+        probe.Name = "KH_Probe"
+        probe.Parent = cg
+        probe:Destroy()
+        return cg
+    end)
+    if okCore and core then return core end
+
+    local okPg, pg = pcall(function()
+        return LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
+    end)
+    if okPg and pg then return pg end
     return LocalPlayer:WaitForChild("PlayerGui")
 end
 
 local TargetParent = GetSafeUIParent()
 
-if TargetParent:FindFirstChild("KillerHub_Universal") then
-    TargetParent.KillerHub_Universal:Destroy()
-end
+pcall(function()
+    local old = TargetParent:FindFirstChild("KillerHub_Universal")
+    if old then old:Destroy() end
+end)
 
 local Themes = {
     ["Obsidian"] = {
@@ -505,7 +656,18 @@ local _shortcutBorderColor = nil -- forward: se asigna junto a getShortcutBorder
 
 local function create(instanceType, properties, parent)
     local obj = Instance.new(instanceType)
-    for prop, val in pairs(properties) do obj[prop] = val end
+    -- 🧩 V5.9.1: la asignación va dentro de un pcall en bloque (coste: un solo
+    -- pcall por instancia, únicamente al construir la UI). Si el cliente o el
+    -- executor no conoce alguna propiedad nueva (p.ej. ScreenInsets), en vez de
+    -- tirar TODO el script se reintenta propiedad por propiedad y se ignora
+    -- solo la que no existe. Esto es lo que hacía fallar la carga en PC.
+    if not pcall(function()
+        for prop, val in pairs(properties) do obj[prop] = val end
+    end) then
+        for prop, val in pairs(properties) do
+            pcall(function() obj[prop] = val end)
+        end
+    end
     -- 🧼 A UIStroke parented to a TextLabel/TextButton/TextBox defaults to
     -- "Contextual", which outlines every GLYPH -> the ugly double-layer text
     -- the premium themes suffered from. Border mode keeps only the frame edge.
@@ -570,7 +732,33 @@ end
 -- ============================================================================
 -- 🖥 INTERFAZ CON CANVASGROUP DE ALTO RENDIMIENTO
 -- ============================================================================
-local ScreenGui = create("ScreenGui", {Name = "KillerHub_Universal", IgnoreGuiInset = false, ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets, ResetOnSpawn = false, DisplayOrder = 999999, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, TargetParent)
+-- 🧩 V5.9.1 · ScreenGui a prueba de executors:
+--   • ScreenInsets solo se pide si el Enum existe en este cliente (en clientes
+--     viejos/PC no existe y la asignación tumbaba el script entero).
+--   • Se protege con syn.protect_gui / protectgui cuando el executor lo trae.
+--   • Si el parenteo al destino falla (CoreGui bloqueado), cae a PlayerGui.
+local ScreenGui = create("ScreenGui", (function()
+    local props = {
+        Name = "KillerHub_Universal",
+        IgnoreGuiInset = false,
+        ResetOnSpawn = false,
+        DisplayOrder = 999999,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    }
+    pcall(function() props.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets end)
+    return props
+end)())
+_G.__KH_ENV.protect(ScreenGui)
+if not pcall(function() ScreenGui.Parent = TargetParent end) or not ScreenGui.Parent then
+    pcall(function()
+        ScreenGui.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            or LocalPlayer:WaitForChild("PlayerGui")
+    end)
+end
+if not ScreenGui.Parent then
+    warn("[KillerHub] Tu ejecutor no permitió crear la interfaz (ni CoreGui ni PlayerGui).")
+    return {}
+end
 -- 🌐 Ref global al ScreenGui para que subsistemas (notificaciones v1.3) lo
 -- encuentren incluso cuando gethui() lo parenta a un contenedor no estándar
 -- (CoreGui protegido en algunos executors). Sin esto las notificaciones no
@@ -645,8 +833,11 @@ if KH_IsPC then
                 end
             end
             for _, d in ipairs(ScreenGui:GetDescendants()) do thicken(d) end
+            -- ⚡ V5.9.1: antes se creaba una tarea diferida por CADA descendiente
+            -- añadido (miles al construir el hub) = pico de lag al abrir. Ahora
+            -- se filtra en el propio evento y solo se toca un ScrollingFrame.
             local c = ScreenGui.DescendantAdded:Connect(function(d)
-                task.defer(function() pcall(thicken, d) end)
+                if d:IsA("ScrollingFrame") then pcall(thicken, d) end
             end)
             table.insert(Connections, c)
         end)
@@ -727,21 +918,21 @@ local warnedNoCustomAsset = false
 local function getAssetFn()
     local names = {"getcustomasset", "getsynasset", "getcustomassetasync"}
     for _, n in ipairs(names) do
-        local fn = rawget(getfenv(), n)
+        -- 🧩 V5.9.1: vía capa de compatibilidad (getfenv puede no existir).
+        local fn = _G.__KH_ENV.g(n)
         if typeof(fn) == "function" then return fn end
     end
-    if syn and typeof(syn.getcustomasset) == "function" then return syn.getcustomasset end
+    local synFn
+    pcall(function() synFn = syn and syn.getcustomasset end)
+    if typeof(synFn) == "function" then return synFn end
     return nil
 end
 
 local function httpGetBinary(url)
     -- request-style executors (devuelven .Body ya en binario)
-    local candidates = {}
-    if syn and typeof(syn.request) == "function" then table.insert(candidates, syn.request) end
-    local envReq = rawget(getfenv(), "request") or rawget(getfenv(), "http_request")
-    if typeof(envReq) == "function" then table.insert(candidates, envReq) end
-    if http and typeof(http.request) == "function" then table.insert(candidates, http.request) end
-    if fluxus and typeof(fluxus.request) == "function" then table.insert(candidates, fluxus.request) end
+    -- 🧩 V5.9.1: getfenv() no existe en varios executors de PC y se llamaba
+    -- sin protección. Ahora la lista sale de la capa de compatibilidad.
+    local candidates = _G.__KH_ENV.requestFn()
 
     for _, fn in ipairs(candidates) do
         local ok, res = pcall(fn, {Url = url, Method = "GET"})
@@ -1885,6 +2076,17 @@ pcall(function()
         -- Ignora ruido irrelevante o errores nuestros ya reportados
         if msg == "" then return end
         if msg:find("HTTP", 1, true) and msg:find("disabled", 1, true) then return end
+        -- ⚡ V5.9.1 · ANTI-SPAM: en juegos con scripts rotos, ScriptContext.Error
+        -- puede dispararse decenas de veces por segundo. Cada aviso creaba un
+        -- Frame + tweens → tirones reales. Ahora: mismo mensaje se ignora, y
+        -- como máximo un aviso cada 3 segundos.
+        KillerHub.__LastErrText = KillerHub.__LastErrText or ""
+        KillerHub.__LastErrAt = KillerHub.__LastErrAt or 0
+        local nowClock = os.clock()
+        if msg == KillerHub.__LastErrText and (nowClock - KillerHub.__LastErrAt) < 15 then return end
+        if (nowClock - KillerHub.__LastErrAt) < 3 then return end
+        KillerHub.__LastErrText = msg
+        KillerHub.__LastErrAt = nowClock
         _notifyError("⚠️ Error detectado", msg)
         warn("[KillerHub] ScriptContext.Error:\n" .. tostring(stackTrace))
     end)
@@ -1893,9 +2095,8 @@ end)
 
 local function updateGlobalFlags(flagName, value)
     Flags[flagName] = { CurrentValue = value }
-    if getgenv().KillerHub then
-        getgenv().KillerHub.Flags = Flags
-    end
+    local env = _G.__KH_ENV.genv()
+    if env.KillerHub then env.KillerHub.Flags = Flags end
 end
 
 function KillerHub:SetPremiumIds(idTable) end
@@ -2006,7 +2207,10 @@ function KillerHub:Unload()
     table.clear(self.TargetThemeElements)
     table.clear(self.Elements)
     
-    if getgenv().KillerHub then getgenv().KillerHub = nil end
+    pcall(function()
+        local env = _G.__KH_ENV.genv()
+        if env.KillerHub then env.KillerHub = nil end
+    end)
     warn("KillerHub fully unloaded: active toggles notified, connections closed and memory freed.")
 end
 
@@ -5642,8 +5846,16 @@ task.defer(function()
 end)
 
 -- Publicación y Sincronización Inicial de Flags globales
-getgenv().KillerHub = KillerHub
-getgenv().KillerHub.Flags = Flags
+-- 🧩 V5.9.1: publicación blindada (getgenv puede no existir → cae a _G).
+do
+    local env = _G.__KH_ENV.genv()
+    env.KillerHub = KillerHub
+    env.KillerHub.Flags = Flags
+end
+KillerHub.Platform = _G.__KH_ENV.platform()
+KillerHub.Executor = _G.__KH_ENV.executor()
+KillerHub.IsPC = (KillerHub.Platform == "PC")
+KillerHub.IsMobile = (KillerHub.Platform == "Android" or KillerHub.Platform == "iOS" or KillerHub.Platform == "Móvil")
 
 
 -- ============================================================================
@@ -6276,38 +6488,20 @@ local KH_ICON_USER  = "rbxassetid://81489458260315"
 local KH_ICON_CLOSE = "rbxassetid://82994774214203"
 
     if KH_ANALYTICS_URL ~= "" then
-        local httpReq = (syn and syn.request) or (http and http.request) or http_request
-            or (fluxus and fluxus.request) or request
+        -- 🧩 V5.9.1: la petición sale de la capa de compatibilidad (cubre
+        -- todos los executors de PC/móvil y nunca indexa globales inexistentes).
+        local httpReqList = _G.__KH_ENV.requestFn()
 
         local function httpRequest(opts)
-            if typeof(httpReq) ~= "function" then return nil end
-            local ok, res = pcall(httpReq, opts)
-            if ok then return res end
+            for _, fn in ipairs(httpReqList) do
+                local ok, res = pcall(fn, opts)
+                if ok and type(res) == "table" then return res end
+            end
             return nil
         end
 
-        local function detectExecutor()
-            local name
-            pcall(function()
-                if identifyexecutor then name = identifyexecutor()
-                elseif getexecutorname then name = getexecutorname() end
-            end)
-            if type(name) == "string" and name ~= "" then return name end
-            if syn then return "Synapse" end
-            if fluxus then return "Fluxus" end
-            if KRNL_LOADED then return "Krnl" end
-            return "desconocido"
-        end
-
-        local function detectPlatform()
-            local ok, touch = pcall(function() return UserInputService.TouchEnabled end)
-            local ok2, kb = pcall(function() return UserInputService.KeyboardEnabled end)
-            if ok and ok2 then
-                if kb then return "PC" end
-                if touch then return "Móvil" end
-            end
-            return "desconocido"
-        end
+        local detectExecutor = _G.__KH_ENV.executor
+        local detectPlatform = _G.__KH_ENV.platform
 
         local function gameName()
             local name = "Juego " .. tostring(game.PlaceId)
@@ -6859,21 +7053,18 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                     if panelOpen == state then return end
                     panelOpen = state
                     animToken = animToken + 1
-                    local token = animToken
 
                     if state then
+                        -- 🎬 V5.9.1 (pedido): el panel privado abre AL INSTANTE.
+                        -- Sin tween de escala ni fundido: se ve ya en su tamaño
+                        -- final. Las demás animaciones del hub no se tocan.
                         OPEN_POS = panel.Position
                         empty.Text = "Cargando usuarios..."
                         empty.Visible = true
-                        -- Nace pequeño y transparente, y crece con rebote.
-                        panel.Size = UDim2.new(OPEN_SIZE.X.Scale, math.floor(OPEN_SIZE.X.Offset * 0.86),
-                                               OPEN_SIZE.Y.Scale, math.floor(OPEN_SIZE.Y.Offset * 0.86))
-                        panel.BackgroundTransparency = 1
-                        panelStroke.Transparency = 1
+                        panel.Size = OPEN_SIZE
+                        panel.BackgroundTransparency = 0
+                        panelStroke.Transparency = 0.4
                         panel.Visible = true
-                        tween(panel, 0.26, { Size = OPEN_SIZE, BackgroundTransparency = 0 },
-                            Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-                        tween(panelStroke, 0.26, { Transparency = 0.4 })
                         task.spawn(refreshPanel)
 
                         if not outsideConn then
@@ -6881,21 +7072,26 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                             -- en el hub o en el botón flotante). Solo sobrevive si
                             -- el gesto se convierte en arrastre/scroll dentro del
                             -- panel, o si tocaste una fila / "Unirme".
+                            -- ⚡ V5.9.1: antes, CADA toque abría una corrutina
+                            -- que sondeaba la posición cada 0.03 s hasta soltar
+                            -- (33 iteraciones por segundo por dedo, con el panel
+                            -- abierto). Ahora todo es por evento: cero polling.
                             outsideConn = UserInputService.InputBegan:Connect(function(input)
                                 if input.UserInputType ~= Enum.UserInputType.MouseButton1
                                     and input.UserInputType ~= Enum.UserInputType.Touch then return end
                                 local startPos = input.Position
                                 local startedInside = inside(panel, startPos)
-                                task.spawn(function()
-                                    local dragged = false
-                                    while input.UserInputState ~= Enum.UserInputState.End do
-                                        local d = (input.Position - startPos)
-                                        if math.abs(d.X) > 8 or math.abs(d.Y) > 8 then
-                                            dragged = true
-                                            if startedInside then break end
-                                        end
-                                        task.wait(0.03)
-                                    end
+                                local dragged = false
+                                local moveC, endC
+                                moveC = UserInputService.InputChanged:Connect(function(ci)
+                                    if ci ~= input and ci.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+                                    local d = input.Position - startPos
+                                    if math.abs(d.X) > 8 or math.abs(d.Y) > 8 then dragged = true end
+                                end)
+                                endC = UserInputService.InputEnded:Connect(function(ei)
+                                    if ei ~= input and ei.UserInputType ~= input.UserInputType then return end
+                                    if moveC then moveC:Disconnect() moveC = nil end
+                                    if endC then endC:Disconnect() endC = nil end
                                     if not panelOpen then return end
                                     if dragged and startedInside then return end   -- deslizando/scroll dentro
                                     if os.clock() < keepUntil then return end      -- tocó fila o "Unirme"
@@ -6908,21 +7104,12 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                             outsideConn:Disconnect()
                             outsideConn = nil
                         end
-                        tween(panel, 0.16, {
-                            Size = UDim2.new(OPEN_SIZE.X.Scale, math.floor(OPEN_SIZE.X.Offset * 0.9),
-                                             OPEN_SIZE.Y.Scale, math.floor(OPEN_SIZE.Y.Offset * 0.9)),
-                            BackgroundTransparency = 1,
-                        }, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
-                        tween(panelStroke, 0.16, { Transparency = 1 })
-                        task.delay(animOff() and 0 or 0.18, function()
-                            if token == animToken and not panelOpen then
-                                panel.Visible = false
-                                panel.Size = OPEN_SIZE
-                                panel.Position = OPEN_POS
-                                panel.BackgroundTransparency = 0
-                                panelStroke.Transparency = 0.4
-                            end
-                        end)
+                        -- 🎬 V5.9.1 (pedido): cierre instantáneo, sin tween.
+                        panel.Visible = false
+                        panel.Size = OPEN_SIZE
+                        panel.Position = OPEN_POS
+                        panel.BackgroundTransparency = 0
+                        panelStroke.Transparency = 0.4
                     end
                 end
 
@@ -6971,7 +7158,9 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                 -- Bucle ligero: solo pide datos cuando hay algo que mostrar.
                 task.spawn(function()
                     while pill.Parent and not _G.__KillerHub_Unloaded__ do
-                        if panelOpen then
+                        -- ⚡ V5.9.1: con el hub cerrado no se pide NADA a la web
+                        -- (antes seguía consultando aunque no se viera).
+                        if panelOpen and (not main or main.Visible) then
                             refreshPanel()
                         end
                         if not panelOpen and pill.Visible and (not main or main.Visible) then
