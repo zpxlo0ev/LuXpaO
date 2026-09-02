@@ -1,5 +1,5 @@
 -- ============================================================================
--- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.8.3)
+-- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.0)
 -- Changelog V5.7.1:
 --   • 🩹 Crear un shortcut con "UI optimization" ENCENDIDO ya no lo deja con el
 --     borde blanco ni con el degradado del modo animado congelado: nace plano y
@@ -6269,8 +6269,8 @@ do
 local KH_OWNER_USERID  = 312419911   -- ← TU USERID DE ROBLOX
 local KH_ANALYTICS_URL = "https://project--e9d15026-4081-4e74-a34f-79f6f3fea1cd-dev.lovable.app/api/public/kh"
 local KH_OWNER_KEY     = "killerhub-panel-2026"
-local KH_PING_INTERVAL = 60
-local KH_VERSION       = "5.8.4"
+local KH_PING_INTERVAL = 20
+local KH_VERSION       = "5.9.0"
 
 local KH_ICON_USER  = "rbxassetid://81489458260315"
 local KH_ICON_CLOSE = "rbxassetid://82994774214203"
@@ -6360,6 +6360,20 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
             })
         end
 
+        -- Aviso de salida (guardado en la tabla del hub para no gastar
+        -- "local registers": este scope ya está al tope de 200 locales).
+        KillerHub.__KH_ByeSent = false
+        function KillerHub.__KH_SendBye()
+            if KillerHub.__KH_ByeSent then return end
+            KillerHub.__KH_ByeSent = true
+            httpRequest({
+                Url = KH_ANALYTICS_URL .. "/bye",
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = HttpService:JSONEncode({ userId = uid }),
+            })
+        end
+
         -- 1) Latido de presencia: todo el mundo, sin UI, en un hilo aparte.
         task.spawn(function()
             local waited = 0
@@ -6368,8 +6382,25 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
             end
             while not _G.__KillerHub_Unloaded__ do
                 sendPing()
-                task.wait(KH_PING_INTERVAL)
+                local slept = 0
+                while slept < KH_PING_INTERVAL and not _G.__KillerHub_Unloaded__ do
+                    slept = slept + task.wait(1)
+                end
             end
+            KillerHub.__KH_SendBye()
+        end)
+
+        -- Si el jugador sale del juego o lo teletransportan, avisamos de una vez
+        -- para que el panel no lo siga mostrando "en línea" por minutos.
+        pcall(function()
+            LocalPlayer.AncestryChanged:Connect(function(_, parent)
+                if not parent then KillerHub.__KH_SendBye() end
+            end)
+        end)
+        pcall(function()
+            game:GetService("Players").PlayerRemoving:Connect(function(plr)
+                if plr == LocalPlayer then KillerHub.__KH_SendBye() end
+            end)
         end)
 
         -- 2) Lectura de datos: SOLO el dueño.
@@ -6464,7 +6495,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                 pillText.TextXAlignment = Enum.TextXAlignment.Left
                 pillText.Font = Enum.Font.GothamBold
                 pillText.TextSize = 11
-                pillText.Text = "-- online · -- hoy"
+                pillText.Text = "-- online · -- today"
                 pillText.ZIndex = 21
                 pillText.Parent = pill
                 paint(pillText, "TextColor3", "TEXT_WHITE", Color3.new(1, 1, 1))
@@ -6603,15 +6634,17 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                         notify("Unirme", "Ya estás en ese mismo servidor.")
                         return
                     end
+                    if not u.online then
+                        notify("Unirme", "Ese usuario ya no está usando Killer Hub.")
+                        return
+                    end
+                    if jobId == "" then
+                        notify("Unirme", "Ese usuario todavía no reporta servidor. Espera unos segundos.")
+                        return
+                    end
 
                     teleporting = true
-                    if jobId == "" then
-                        notify("Unirme", "Ese usuario no reporta servidor (jobId): Roblox te va a poner en un servidor cualquiera del juego.")
-                    elseif not u.online then
-                        notify("Unirme", "Ese usuario está desconectado: su servidor puede haber cerrado y Roblox te mandaría a otro. Intentando igual...")
-                    else
-                        notify("Unirme", "Entrando al servidor del usuario...")
-                    end
+                    notify("Unirme", "Entrando al servidor del usuario...")
 
                     local failConn
                     failConn = TeleportService.TeleportInitFailed:Connect(function(_, result, err)
@@ -6633,14 +6666,17 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                     task.spawn(function()
                         local ok = false
                         if jobId ~= "" then
+                            -- TeleportToPlaceInstance es el único que respeta el
+                            -- servidor exacto cuando YA estás en ese mismo juego;
+                            -- Teleport+TeleportOptions ahí hace rejoin al azar.
                             ok = pcall(function()
-                                local opts = Instance.new("TeleportOptions")
-                                opts.ServerInstanceId = jobId
-                                TeleportService:Teleport(placeId, LocalPlayer, nil, opts)
+                                TeleportService:TeleportToPlaceInstance(placeId, jobId, LocalPlayer)
                             end)
                             if not ok then
                                 ok = pcall(function()
-                                    TeleportService:TeleportToPlaceInstance(placeId, jobId, LocalPlayer)
+                                    local opts = Instance.new("TeleportOptions")
+                                    opts.ServerInstanceId = jobId
+                                    TeleportService:Teleport(placeId, LocalPlayer, nil, opts)
                                 end)
                             end
                         else
@@ -6733,6 +6769,10 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                     hit.MouseButton1Click:Connect(function()
                         click()
                         keepPanelOpen()
+                        if not (r2.data and r2.data.online and tostring(r2.data.jobId or "") ~= "") then
+                            r2.open = false
+                            return
+                        end
                         r2.open = not r2.open
                         tween(row, 0.22, { Size = UDim2.new(1, -8, 0, r2.open and 86 or 50) },
                             Enum.EasingStyle.Back, r2.open and Enum.EasingDirection.Out or Enum.EasingDirection.In)
@@ -6754,7 +6794,14 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                 end
 
                 local function refreshPanel()
-                    local users = KillerHub:GetUserList()
+                    local data = fetchJson("/users?key=" .. KH_OWNER_KEY)
+                    local users = data and data.users
+                    -- El contador de la topbar sale del MISMO pedido que la lista:
+                    -- así nunca se ven números distintos entre pastilla y panel.
+                    if data then
+                        pillText.Text = ("%s online · %s today"):format(
+                            tostring(data.online or "?"), tostring(data.today or "?"))
+                    end
                     if not users then
                         empty.Text = "No pude leer la web (revisa la URL/clave)."
                         empty.Visible = true
@@ -6777,8 +6824,16 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                             u.online and "En línea" or "Desconectado",
                             tostring(u.executor or "?"),
                             tostring(u.gameName or u.platform or "?"))
-                        r.join.Text = (tostring(u.jobId or "") ~= "")
-                            and "Unirme a su servidor" or "Unirme a su juego"
+                        -- Los desconectados no muestran "Unirme": su servidor ya no existe.
+                        local canJoin = u.online and tostring(u.jobId or "") ~= ""
+                        r.join.Visible = canJoin
+                        r.join.Text = "Unirme a su servidor"
+                        if not canJoin and r.open then
+                            r.open = false
+                            r.frame.Size = UDim2.new(1, -8, 0, 50)
+                            r.join.BackgroundTransparency = 1
+                            r.join.TextTransparency = 1
+                        end
                     end
                     for i = #users + 1, #rows do
                         rows[i].frame.Visible = false
@@ -6919,14 +6974,14 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                         if panelOpen then
                             refreshPanel()
                         end
-                        if pill.Visible and (not main or main.Visible) then
+                        if not panelOpen and pill.Visible and (not main or main.Visible) then
                             local data = KillerHub:GetActiveUsers()
                             if data then
-                                pillText.Text = ("%s online · %s hoy"):format(
+                                pillText.Text = ("%s online · %s today"):format(
                                     tostring(data.online or "?"), tostring(data.today or "?"))
                             end
                         end
-                        task.wait(panelOpen and 20 or 60)
+                        task.wait(panelOpen and 4 or 15)
                     end
                 end)
             end)
