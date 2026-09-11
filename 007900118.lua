@@ -1298,23 +1298,24 @@ local DecorGradient = create("UIGradient", {
     })
 }, DecorLine)
 local PerformanceLabel = create("TextLabel", {Size = UDim2.new(0, 160, 1, 0), Position = UDim2.new(1, -15, 0, 0), AnchorPoint = Vector2.new(1, 0), BackgroundTransparency = 1, Text = "FPS: -- | PING: --", TextColor3 = CurrentTheme.TEXT_MUTED, TextXAlignment = Enum.TextXAlignment.Right, Font = Enum.Font.GothamMedium, TextSize = 11}, Topbar)
+local KHS = {} -- estado/constantes agrupadas (evita el limite de 200 locals de Luau)
 
-local fpsTimer = 0
-local frameCounter = 0
+KHS.fpsTimer = 0
+KHS.frameCounter = 0
 local perfConn = RunService.Heartbeat:Connect(function(dt)
-    fpsTimer = fpsTimer + dt
-    frameCounter = frameCounter + 1
-    if fpsTimer >= 1 then
+    KHS.fpsTimer = KHS.fpsTimer + dt
+    KHS.frameCounter = KHS.frameCounter + 1
+    if KHS.fpsTimer >= 1 then
         -- Con el menu cerrado nadie ve la etiqueta: reset y salida antes de
         -- tocar Stats / string.format (ahorra CPU en telefonos).
         if not MainFrame.Visible then
-            frameCounter = 0
-            fpsTimer = 0
+            KHS.frameCounter = 0
+            KHS.fpsTimer = 0
             return
         end
-        local currentFps = frameCounter
-        frameCounter = 0
-        fpsTimer = 0
+        local currentFps = KHS.frameCounter
+        KHS.frameCounter = 0
+        KHS.fpsTimer = 0
         local ping = 0
         pcall(function()
             if Stats:FindFirstChild("Network") and Stats.Network:FindFirstChild("ServerToClientPing") then
@@ -1468,17 +1469,17 @@ updateButtonSize()
 -- MainFrame es un Frame normal (nitidez absoluta en fuentes) y el fade se
 -- construye animando los subelementos por separado, con un ligero delay
 -- escalonado que produce una sensacion mas premium sin costo de GPU.
-local BLUR_MAX = 14
-local menuBlur -- BlurEffect que solo existe mientras el menu esta abierto
+KHS.BLUR_MAX = 14
+KHS.menuBlur = nil -- BlurEffect que solo existe mientras el menu esta abierto
 local function _ensureBlur()
-    if menuBlur and menuBlur.Parent then return menuBlur end
+    if KHS.menuBlur and KHS.menuBlur.Parent then return KHS.menuBlur end
     local ok, lighting = pcall(function() return game:GetService("Lighting") end)
     if not ok or not lighting then return nil end
-    menuBlur = Instance.new("BlurEffect")
-    menuBlur.Name = "KillerHub_MenuBlur"
-    menuBlur.Size = 0
-    menuBlur.Parent = lighting
-    return menuBlur
+    KHS.menuBlur = Instance.new("BlurEffect")
+    KHS.menuBlur.Name = "KillerHub_MenuBlur"
+    KHS.menuBlur.Size = 0
+    KHS.menuBlur.Parent = lighting
+    return KHS.menuBlur
 end
 
 -- Snapshots de opacidad "en reposo" de cada capa del menu, calculadas al abrir
@@ -1515,7 +1516,7 @@ end
 -- ✨ ANIMACIÓN COMPARTIDA DE BORDES ("luz recorriendo el borde")
 -- ----------------------------------------------------------------------------
 -- UNA sola conexión a Heartbeat para TODA la librería. Cada frame:
---   1. Avanza un único ángulo compartido (_borderAngle).
+--   1. Avanza un único ángulo compartido (KHS._borderAngle).
 --   2. Si el menú principal está visible y enfocado, lo aplica a BordeGradient.
 --   3. Si hay shortcuts flotantes activos con borde animado, les aplica el
 --      MISMO ángulo (no cada uno el suyo — así el costo no crece por widget,
@@ -1526,9 +1527,9 @@ end
 -- así que aunque haya 20 shortcuts en pantalla el costo sigue siendo trivial.
 -- Se apaga por completo (early return, cero trabajo) con Config.MenuAnimEnabled.
 -- ============================================================================
-local BORDER_ANIM_SPEED = 185 -- valor base; Config.AnimSpeed manda (pestaña Modify)
-local _borderAngle = 0
-local _innerAccum = 0
+KHS.BORDER_ANIM_SPEED = 185 -- valor base; Config.AnimSpeed manda (pestaña Modify)
+KHS._borderAngle = 0
+KHS._innerAccum = 0
 -- ⚡ V5.5.0 — CULLING DE BORDES INTERNOS
 -- `cache` guarda, por gradiente, la lista de contenedores (página, host de
 -- páginas, frame de la pestaña) de los que depende su visibilidad. Se resuelve
@@ -1559,8 +1560,8 @@ local _innerCull = {
 local ShortcutBorderAnims = {}  -- id -> UIGradient del borde del shortcut
 local ShortcutLabelPulses = {}  -- id -> {label = TextLabel, base = Color3, pulse = Color3}
 local ShortcutLabelWaves = {}   -- id -> UIGradient del texto (ola hacia la derecha)
-local WAVE_SPEED = 0.85         -- valor base; Config.WaveSpeed manda
-local _waveOffset = 0
+KHS.WAVE_SPEED = 0.85         -- valor base; Config.WaveSpeed manda
+KHS._waveOffset = 0
 
 local function _borderAnimStep(dt)
     -- ⚡ UiLite: cero trabajo por frame (ni una comparación más allá de esta).
@@ -1574,17 +1575,17 @@ local function _borderAnimStep(dt)
     local winLive = MainFrame.Visible and menuFocused
     local floatLive = OpenCloseBtn.Visible and (Config.FloatBorder ~= false and not Config.UiLite)
     if not (winLive or floatLive or scLive) then return end
-    _borderAngle = (_borderAngle + dt * (Config.AnimSpeed or BORDER_ANIM_SPEED)) % 360
+    KHS._borderAngle = (KHS._borderAngle + dt * (Config.AnimSpeed or KHS.BORDER_ANIM_SPEED)) % 360
     local menuLive = winLive
 
     if menuLive and (Config.WindowBorder ~= false and not Config.UiLite) then
-        BordeGradient.Rotation = _borderAngle
-        OuterGlowGradient.Rotation = _borderAngle
+        BordeGradient.Rotation = KHS._borderAngle
+        OuterGlowGradient.Rotation = KHS._borderAngle
     end
 
     -- Borde animado del botón flotante de abrir/cerrar (siempre visible).
     if FloatingStrokeGradient and OpenCloseBtn.Visible and (Config.FloatBorder ~= false and not Config.UiLite) then
-        FloatingStrokeGradient.Rotation = _borderAngle
+        FloatingStrokeGradient.Rotation = KHS._borderAngle
     end
 
     -- Bordes internos finos: se refrescan a ~30 Hz (y solo con el menú a la
@@ -1596,9 +1597,9 @@ local function _borderAnimStep(dt)
     -- pestaña abierta. La página contenedora se resuelve una única vez y queda
     -- cacheada en _innerCull.
     if menuLive and (Config.InnerBorders ~= false and not Config.UiLite) then
-        _innerAccum = _innerAccum + dt
-        if _innerAccum >= 0.033 then
-            _innerAccum = 0
+        KHS._innerAccum = KHS._innerAccum + dt
+        if KHS._innerAccum >= 0.033 then
+            KHS._innerAccum = 0
             for i = #InnerBorderGradients, 1, -1 do
                 local g = InnerBorderGradients[i]
                 if g.Parent then
@@ -1608,7 +1609,7 @@ local function _borderAnimStep(dt)
                         _innerCull.cache[g] = chain
                     end
                     if _innerCull.visible(chain) then
-                        g.Rotation = _borderAngle
+                        g.Rotation = KHS._borderAngle
                     end
                 else
                     _innerCull.cache[g] = nil
@@ -1626,7 +1627,7 @@ local function _borderAnimStep(dt)
     if (Config.ShortcutBorder ~= false and not Config.UiLite) and next(ShortcutBorderAnims) ~= nil then
         for key, gradient in pairs(ShortcutBorderAnims) do
             if gradient.Parent then
-                gradient.Rotation = _borderAngle
+                gradient.Rotation = KHS._borderAngle
             else
                 ShortcutBorderAnims[key] = nil
             end
@@ -1639,8 +1640,8 @@ local function _borderAnimStep(dt)
     -- asignación de Offset por etiqueta encendida). Va de -1 a 1 en X, así la
     -- luz entra por la izquierda y sale por la derecha, en loop continuo.
     if next(ShortcutLabelWaves) ~= nil then
-        _waveOffset = (_waveOffset + dt * (Config.WaveSpeed or WAVE_SPEED)) % 1
-        local off = Vector2.new(_waveOffset * 2 - 1, 0)
+        KHS._waveOffset = (KHS._waveOffset + dt * (Config.WaveSpeed or KHS.WAVE_SPEED)) % 1
+        local off = Vector2.new(KHS._waveOffset * 2 - 1, 0)
         for key, g in pairs(ShortcutLabelWaves) do
             if g.Parent then g.Offset = off else ShortcutLabelWaves[key] = nil end
         end
@@ -1670,9 +1671,9 @@ local function setMenuVisibility(visible)
             -- ⚡ UiLite: el BlurEffect de Lighting es de lo más caro en gama
             -- baja, así que en modo optimizado no se crea siquiera.
             if Config.UiLite then
-                if menuBlur and menuBlur.Parent then pcall(function() menuBlur:Destroy() end) menuBlur = nil end
+                if KHS.menuBlur and KHS.menuBlur.Parent then pcall(function() KHS.menuBlur:Destroy() end) KHS.menuBlur = nil end
             else
-                local blur = _ensureBlur() if blur then blur.Size = BLUR_MAX end
+                local blur = _ensureBlur() if blur then blur.Size = KHS.BLUR_MAX end
             end
             return
         end
@@ -1701,7 +1702,7 @@ local function setMenuVisibility(visible)
         local blur = _ensureBlur()
         if blur then
             blur.Size = 0
-            _tween(blur, {Size = BLUR_MAX}, IN_TIME, EASE, Enum.EasingDirection.Out):Play()
+            _tween(blur, {Size = KHS.BLUR_MAX}, IN_TIME, EASE, Enum.EasingDirection.Out):Play()
         end
     else
         if not anim then
@@ -1710,8 +1711,8 @@ local function setMenuVisibility(visible)
             Sidebar.BackgroundTransparency = 1
             MainFrame.Visible = false
             _menuScale.Scale = 1
-            if menuBlur and menuBlur.Parent then
-                pcall(function() menuBlur:Destroy() end); menuBlur = nil
+            if KHS.menuBlur and KHS.menuBlur.Parent then
+                pcall(function() KHS.menuBlur:Destroy() end); KHS.menuBlur = nil
             end
             return
         end
@@ -1732,12 +1733,12 @@ local function setMenuVisibility(visible)
         end)
         closeTween:Play()
 
-        if menuBlur and menuBlur.Parent then
-            local bTween = _tween(menuBlur, {Size = 0}, OUT_TIME, EASE, Enum.EasingDirection.In)
+        if KHS.menuBlur and KHS.menuBlur.Parent then
+            local bTween = _tween(KHS.menuBlur, {Size = 0}, OUT_TIME, EASE, Enum.EasingDirection.In)
             bTween.Completed:Connect(function()
-                if not menuVisible and menuBlur then
-                    pcall(function() menuBlur:Destroy() end)
-                    menuBlur = nil
+                if not menuVisible and KHS.menuBlur then
+                    pcall(function() KHS.menuBlur:Destroy() end)
+                    KHS.menuBlur = nil
                 end
             end)
             bTween:Play()
@@ -1811,6 +1812,51 @@ local function addInteractiveFeedback(inst)
         })
         activeTweens[inst]:Play()
     end)
+end
+
+-- ============================================================================
+-- 📜 AUTO-SCROLL AL ABRIR (dropdowns / color pickers)
+-- ----------------------------------------------------------------------------
+-- Si el widget se abrió cerca del borde inferior de la pestaña (scroll frame)
+-- y el contenido que va a desplegar quedaría tapado/cortado, desliza el
+-- contenedor lo justo y necesario con un tween corto — así el usuario nunca
+-- tiene que scrollear a mano para ver las opciones que acaba de abrir.
+-- Barato: un par de lecturas de AbsolutePosition/Size y, como mucho, UN tween;
+-- no hace nada si ya es totalmente visible.
+-- ============================================================================
+local function scrollWidgetIntoView(scrollFrame, widgetFrame, growBy)
+    if not scrollFrame or not widgetFrame then return end
+    if not scrollFrame:IsA("ScrollingFrame") then return end
+    local viewportBottom = scrollFrame.AbsolutePosition.Y + scrollFrame.AbsoluteSize.Y
+    local widgetBottom = widgetFrame.AbsolutePosition.Y + widgetFrame.AbsoluteSize.Y + math.max(growBy or 0, 0)
+    if widgetBottom <= viewportBottom then return end -- ya es visible, nada que hacer
+    local overflow = (widgetBottom - viewportBottom) + 10
+    local maxCanvasY = math.max(0, scrollFrame.CanvasSize.Y.Offset - scrollFrame.AbsoluteSize.Y)
+    local newY = math.min(scrollFrame.CanvasPosition.Y + overflow, maxCanvasY)
+    if newY <= scrollFrame.CanvasPosition.Y then return end
+    TweenService:Create(scrollFrame, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        CanvasPosition = Vector2.new(scrollFrame.CanvasPosition.X, newY)
+    }):Play()
+end
+
+-- ============================================================================
+-- 🧑‍🤝‍🧑 AVATAR EN DROPDOWNS DE JUGADORES
+-- ----------------------------------------------------------------------------
+-- Cuando una opción de un CreateDropdown/CreateMultiDropdown coincide con el
+-- Name o DisplayName de un jugador CONECTADO ahora mismo, se le agrega su
+-- avatar (headshot) al lado del nombre para diferenciarlos mejor — sin tocar
+-- la API: sigue siendo el mismo CreateDropdown(flagName, text, options,
+-- callback, default) de siempre, la detección es automática.
+-- Usa el esquema rbxthumb:// en vez de Players:GetUserThumbnailAsync(): es
+-- SÍNCRONO (no bloquea ni abre un hilo por opción) y Roblox se encarga de
+-- cachear/cargar la imagen a nivel de motor, así que abrir un dropdown con
+-- 50 jugadores no cuesta ni un solo yield.
+-- ============================================================================
+local function findPlayerByOptionName(name)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Name == name or p.DisplayName == name then return p end
+    end
+    return nil
 end
 
 -- ============================================================================
@@ -2192,10 +2238,10 @@ function KillerHub:Unload()
 
     -- 🩹 Fix: al apagar el script, retirar el BlurEffect que vive en Lighting;
     -- si no lo destruimos, el desenfoque se queda pegado en pantalla.
-    if menuBlur and menuBlur.Parent then
-        pcall(function() menuBlur:Destroy() end)
+    if KHS.menuBlur and KHS.menuBlur.Parent then
+        pcall(function() KHS.menuBlur:Destroy() end)
     end
-    menuBlur = nil
+    KHS.menuBlur = nil
     
     -- Limpieza profunda de memoria
     table.clear(Connections)
@@ -3539,13 +3585,18 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
     
     local function setDropdownOpen(shouldOpen)
         open = shouldOpen
-        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 126) or 0
+        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 152) or 0
         if SearchBox then SearchBox.Visible = open if not open then SearchBox.Text = "" end end
         
         TweenService:Create(DDFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36 + targetH + searchHeight + (open and 6 or 0))}):Play()
         TweenService:Create(OptsScroll, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
         TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
         OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
+
+        if open then
+            local growBy = (36 + targetH + searchHeight + 6) - DDFrame.AbsoluteSize.Y
+            scrollWidgetIntoView(self.Frame, DDFrame, growBy)
+        end
     end
 
     connect(Trigger.MouseButton1Click, function()
@@ -3561,14 +3612,42 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
         safeCall("callback", callback, name)
     end
 
+    local ROW_H, AVATAR_SIZE = 34, 22
     local function makeOptions()
         for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
         for i, name in ipairs(options) do
             local selected = (name == Flags[flagName].CurrentValue)
-            local OptBtn = create("TextButton", {Size = UDim2.new(1, 0, 0, 27), BackgroundColor3 = selected and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27), Text = name, TextColor3 = selected and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 11, LayoutOrder = i}, OptsScroll)
+            local player = findPlayerByOptionName(name)
+            local txtColor = selected and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
+            local OptBtn = create("TextButton", {
+                Size = UDim2.new(1, 0, 0, ROW_H),
+                BackgroundColor3 = selected and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
+                Text = player and "" or name, -- con avatar, el nombre va en su propio TextLabel (ver abajo)
+                TextColor3 = txtColor, TextXAlignment = Enum.TextXAlignment.Center,
+                Font = Enum.Font.GothamMedium, TextSize = 11.5, LayoutOrder = i
+            }, OptsScroll)
             create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
             if selected then
                 create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 0.45}, OptBtn)
+            end
+
+            if player then
+                local avatar = create("ImageLabel", {
+                    Size = UDim2.new(0, AVATAR_SIZE, 0, AVATAR_SIZE),
+                    Position = UDim2.new(0, 8, 0.5, -AVATAR_SIZE / 2),
+                    BackgroundColor3 = Color3.fromRGB(16, 16, 20),
+                    Image = string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=48&h=48", player.UserId)
+                }, OptBtn)
+                create("UICorner", {CornerRadius = UDim.new(1, 0)}, avatar)
+                create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER, Transparency = 0.25}, avatar)
+                create("TextLabel", {
+                    Size = UDim2.new(1, -(8 + AVATAR_SIZE + 8 + 8), 1, 0),
+                    Position = UDim2.new(0, 8 + AVATAR_SIZE + 8, 0, 0),
+                    BackgroundTransparency = 1, Text = name, TextColor3 = txtColor,
+                    Font = Enum.Font.GothamMedium, TextSize = 11.5,
+                    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
+                    TextTruncate = Enum.TextTruncate.AtEnd
+                }, OptBtn)
             end
             
             connect(OptBtn.MouseButton1Click, function()
@@ -3589,7 +3668,7 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
             end
             task.defer(function()
                 if not open then return end
-                local targetH = math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 126)
+                local targetH = math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 152)
                 DDFrame.Size = UDim2.new(1, 0, 0, 36 + targetH + searchHeight + 6)
                 OptsScroll.Size = UDim2.new(1, -16, 0, targetH)
                 OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
@@ -3702,24 +3781,58 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
     local open = false
     connect(Trigger.MouseButton1Click, function()
         open = not open playUISound()
-        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 126) or 0
+        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 152) or 0
         TweenService:Create(MFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36 + targetH + (open and 6 or 0))}):Play()
         TweenService:Create(OptsScroll, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
         TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
         OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
+        if open then
+            local growBy = (36 + targetH + 6) - MFrame.AbsoluteSize.Y
+            scrollWidgetIntoView(self.Frame, MFrame, growBy)
+        end
     end)
 
     local cacheButtons = {}
+    local ROW_H, AVATAR_SIZE = 34, 22
+    local cacheLabels = {}
     local function makeList()
         for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
         table.clear(cacheButtons)
+        table.clear(cacheLabels)
         
         for i, name in ipairs(options) do
             local isChosen = Config[flagName][name] or false
-            local OptBtn = create("TextButton", {Size = UDim2.new(1, 0, 0, 27), BackgroundColor3 = isChosen and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27), Text = name, TextColor3 = isChosen and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 11, LayoutOrder = i}, OptsScroll)
+            local player = findPlayerByOptionName(name)
+            local txtColor = isChosen and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
+            local OptBtn = create("TextButton", {
+                Size = UDim2.new(1, 0, 0, ROW_H),
+                BackgroundColor3 = isChosen and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
+                Text = player and "" or name, TextXAlignment = Enum.TextXAlignment.Center,
+                TextColor3 = txtColor, Font = Enum.Font.GothamMedium, TextSize = 11.5, LayoutOrder = i
+            }, OptsScroll)
             create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
             local OptGlow = create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = isChosen and 0.45 or 1}, OptBtn)
             cacheButtons[name] = OptBtn
+
+            if player then
+                local avatar = create("ImageLabel", {
+                    Size = UDim2.new(0, AVATAR_SIZE, 0, AVATAR_SIZE),
+                    Position = UDim2.new(0, 8, 0.5, -AVATAR_SIZE / 2),
+                    BackgroundColor3 = Color3.fromRGB(16, 16, 20),
+                    Image = string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=48&h=48", player.UserId)
+                }, OptBtn)
+                create("UICorner", {CornerRadius = UDim.new(1, 0)}, avatar)
+                create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER, Transparency = 0.25}, avatar)
+                local nameLabel = create("TextLabel", {
+                    Size = UDim2.new(1, -(8 + AVATAR_SIZE + 8 + 8), 1, 0),
+                    Position = UDim2.new(0, 8 + AVATAR_SIZE + 8, 0, 0),
+                    BackgroundTransparency = 1, Text = name, TextColor3 = txtColor,
+                    Font = Enum.Font.GothamMedium, TextSize = 11.5,
+                    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
+                    TextTruncate = Enum.TextTruncate.AtEnd
+                }, OptBtn)
+                cacheLabels[name] = nameLabel
+            end
             
             connect(OptBtn.MouseButton1Click, function()
                 local nextState = not Config[flagName][name]
@@ -3727,10 +3840,14 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
                 saveConfig() playUISound() updateText()
                 updateGlobalFlags(flagName, Config[flagName])
                 
+                local newColor = nextState and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27)
+                local newTextColor = nextState and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
                 TweenService:Create(OptBtn, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {
-                    BackgroundColor3 = nextState and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
-                    TextColor3 = nextState and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
+                    BackgroundColor3 = newColor, TextColor3 = newTextColor
                 }):Play()
+                if cacheLabels[name] then
+                    TweenService:Create(cacheLabels[name], TweenInfo.new(0.1, Enum.EasingStyle.Quad), {TextColor3 = newTextColor}):Play()
+                end
                 TweenService:Create(OptGlow, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {
                     Transparency = nextState and 0.45 or 1
                 }):Play()
@@ -3824,6 +3941,7 @@ function TabMethods:CreateToggleColorPicker(flagToggle, flagColor, text, default
     connect(ColorBtn.MouseButton1Click, function() 
         open = not open playUISound() 
         TweenService:Create(MasterFrame, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, open and OPEN_H or CLOSED_H)}):Play()
+        if open then scrollWidgetIntoView(self.Frame, MasterFrame, OPEN_H - MasterFrame.AbsoluteSize.Y) end
         if not open then saveConfig() end -- 💾 Autoguardado explícito al cerrar el menú del color picker
     end)
     
@@ -3883,6 +4001,7 @@ function TabMethods:CreateColorPicker(flagColor, text, defaultColor, callback)
     connect(ColorBtn.MouseButton1Click, function() 
         open = not open playUISound() 
         TweenService:Create(MasterFrame, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, open and OPEN_H or CLOSED_H)}):Play()
+        if open then scrollWidgetIntoView(self.Frame, MasterFrame, OPEN_H - MasterFrame.AbsoluteSize.Y) end
         if not open then saveConfig() end -- 💾 Autoguardado explícito al cerrar el menú del color picker
     end)
     
@@ -4384,12 +4503,11 @@ function KillerHub:CreateTabGroup(name, iconId)
 end
 
 
-local searchThread
 -- 🆕 Filtro global en tiempo real, limitado a la pestaña activa para que la búsqueda
 -- sea instantánea incluso con cientos de widgets. Debounce con task.defer + task.wait.
 connect(SearchInput:GetPropertyChangedSignal("Text"), function()
-    if searchThread then task.cancel(searchThread) end
-    searchThread = task.defer(function()
+    if KHS.searchThread then task.cancel(KHS.searchThread) end
+    KHS.searchThread = task.defer(function()
         task.wait(0.08)
         local q = string.lower(SearchInput.Text or "")
         local currentTabFrameName = KillerHub.CurrentTab and (KillerHub.CurrentTab .. "Frame") or nil
@@ -4424,17 +4542,17 @@ Config.Shortcuts = Config.Shortcuts or {}
 -- 🎯 CONFIGURACIÓN DEL ÍCONO DEL CUADRITO DE SHORTCUTS  ← EDITA AQUÍ
 -- ----------------------------------------------------------------------------
 -- Si quieres usar una IMAGEN de Roblox (asset id), pon el id como string en
--- SHORTCUT_ICON_IMAGE. Ejemplo:
---     local SHORTCUT_ICON_IMAGE = "rbxassetid://7734053426"
+-- KHS.SHORTCUT_ICON_IMAGE. Ejemplo:
+--     --   KHS.SHORTCUT_ICON_IMAGE = "rbxassetid://7734053426"
 -- La imagen se auto-ajusta al cuadrito (padding interno) para que NO se salga.
 --
--- Si SHORTCUT_ICON_IMAGE está vacío (""), se usa el TEXTO de SHORTCUT_ICON_TEXT.
+-- Si KHS.SHORTCUT_ICON_IMAGE está vacío (""), se usa el TEXTO de KHS.SHORTCUT_ICON_TEXT.
 -- Prueba caracteres seguros en Roblox (todos los siguientes renderizan bien):
 --     "↖"  "↗"  "⬈"  "⤢"  "◤"  "◰"  "⌘"  "★"  "＋"  "SC"  "S"
 -- Evita flechas "heavy" del bloque U+1F800 (🡔 🡕 …), muchas veces salen ▯▯.
 -- ============================================================================
-local SHORTCUT_ICON_IMAGE = "rbxassetid://135958512425125"      -- ej: "rbxassetid://7072706796"
-local SHORTCUT_ICON_TEXT  = ""     -- se usa solo si SHORTCUT_ICON_IMAGE == ""
+KHS.SHORTCUT_ICON_IMAGE = "rbxassetid://135958512425125"      -- ej: "rbxassetid://7072706796"
+KHS.SHORTCUT_ICON_TEXT  = ""     -- se usa solo si KHS.SHORTCUT_ICON_IMAGE == ""
 
 -- Colores de "activo" para el activador; en temas cuyo ACCENT es prácticamente
 -- blanco, se usa un color distintivo para que se note el estado ON.
@@ -4497,14 +4615,14 @@ ShortcutScreenRef = ShortcutScreen
 
 -- 🔤 Caché de la fuente activa: evita resolver Enum.Font en cada refresco de
 -- cada shortcut (se invalida sola cuando cambia Config.SelectedFont).
-local _fontCacheName, _fontCacheEnum = nil, Enum.Font.GothamMedium
+KHS._fontCacheName, KHS._fontCacheEnum = nil, Enum.Font.GothamMedium
 local function currentFontEnum()
     local name = Config.SelectedFont or "GothamMedium"
-    if name ~= _fontCacheName then
-        _fontCacheName = name
-        _fontCacheEnum = Enum.Font[name] or Enum.Font.GothamMedium
+    if name ~= KHS._fontCacheName then
+        KHS._fontCacheName = name
+        KHS._fontCacheEnum = Enum.Font[name] or Enum.Font.GothamMedium
     end
-    return _fontCacheEnum
+    return KHS._fontCacheEnum
 end
 
 local Shortcuts = {}          -- id -> { data, cfg, floating instances }
@@ -4570,8 +4688,8 @@ end
 
 -- 📐 Preview del modal: escala la forma para que NUNCA se salga del recuadro
 -- de vista previa (antes la forma "rectangular" con tamaño alto se desbordaba
--- por los costados). Sólo afecta al ModalPreviewFrame, no al shortcut real.
-local PREVIEW_MAX_W, PREVIEW_MAX_H = 120, 84
+-- por los costados). Sólo afecta al MW.ModalPreviewFrame, no al shortcut real.
+KHS.PREVIEW_MAX_W, KHS.PREVIEW_MAX_H = 120, 84
 local function computePreviewSize(cfg)
     local w, h
     if cfg.shape == "rounded" then
@@ -4579,7 +4697,7 @@ local function computePreviewSize(cfg)
     else
         w, h = cfg.size, cfg.size
     end
-    local scale = math.min(PREVIEW_MAX_W / w, PREVIEW_MAX_H / h, 1)
+    local scale = math.min(KHS.PREVIEW_MAX_W / w, KHS.PREVIEW_MAX_H / h, 1)
     return UDim2.new(0, math.floor(w * scale), 0, math.floor(h * scale))
 end
 
@@ -4917,11 +5035,11 @@ end
 
 -- true while the modal is waiting for the user to press a key (so the global
 -- hotkey listener does not fire the shortcut while rebinding).
-local shortcutKeyListening = false
+KHS.shortcutKeyListening = false
 
 -- ⌨ GLOBAL SHORTCUT HOTKEYS (single connection for every shortcut)
 connect(UserInputService.InputBegan, function(input, gameProcessed)
-    if gameProcessed or shortcutKeyListening then return end
+    if gameProcessed or KHS.shortcutKeyListening then return end
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
     local pressed = input.KeyCode.Name
     for _, sc in pairs(Shortcuts) do
@@ -4958,11 +5076,7 @@ end)
 -- --------------------------------------------------------------------
 -- SHORTCUT CONFIG MODAL (centered)
 -- --------------------------------------------------------------------
-local ConfigModal, ModalBody, ModalTitle, ModalPreview, ModalPreviewFrame
-local ModalShapeBtns, ModalSizeSlider, ModalOpacitySlider, ModalLockTrack, ModalLockKnob, ModalLockLabel
-local ModalActionBtn, ModalActionStroke
-local ModalKeyBtn, ModalKeyLabel
-local currentModalSc = nil
+local MW = {} -- contenedor del modal de shortcuts (evita el limite de 200 locals de Luau)
 
 -- 🧹 API pública para limpiar TODOS los shortcuts activos (usada por el
 -- botón "Remover todos los shortcuts" en Settings). No cambia la API
@@ -5004,16 +5118,16 @@ function KillerHub._RefreshShortcuts()
     for _, act in pairs(ShortcutActivators) do
         if act.btn and act.btn.Parent then pcall(function() act.btn.Font = fontEnum end) end
     end
-    if ConfigModal then
-        for _, v in ipairs(ConfigModal:GetDescendants()) do
+    if MW.ConfigModal then
+        for _, v in ipairs(MW.ConfigModal:GetDescendants()) do
             if v:IsA("TextLabel") or v:IsA("TextButton") or v:IsA("TextBox") then v.Font = fontEnum end
         end
     end
 end
 
 local function buildModal()
-    if ConfigModal then return end
-    ConfigModal = create("Frame", {
+    if MW.ConfigModal then return end
+    MW.ConfigModal = create("Frame", {
         Name = "ShortcutConfigModal",
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.new(0.5, 0, 0.5, 0),
@@ -5024,8 +5138,8 @@ local function buildModal()
         ZIndex = 50,
         Active = true
     }, ScreenGui)
-    create("UICorner", {CornerRadius = UDim.new(0, 12)}, ConfigModal)
-    create("UIStroke", {Thickness = 1.5, Color = CurrentTheme.BORDER}, ConfigModal)
+    create("UICorner", {CornerRadius = UDim.new(0, 12)}, MW.ConfigModal)
+    create("UIStroke", {Thickness = 1.5, Color = CurrentTheme.BORDER}, MW.ConfigModal)
 
     -- Backdrop clickable para cerrar
     local backdrop = create("TextButton", {
@@ -5040,13 +5154,13 @@ local function buildModal()
     }, ScreenGui)
     connect(backdrop.MouseButton1Click, function()
         playUISound()
-        ConfigModal.Visible = false
+        MW.ConfigModal.Visible = false
         backdrop.Visible = false
-        currentModalSc = nil
+        MW.currentModalSc = nil
     end)
-    ConfigModal:SetAttribute("BackdropName", backdrop.Name)
+    MW.ConfigModal:SetAttribute("BackdropName", backdrop.Name)
 
-    ModalTitle = create("TextLabel", {
+    MW.ModalTitle = create("TextLabel", {
         Size = UDim2.new(1, -80, 0, 30),
         Position = UDim2.new(0, 16, 0, 10),
         BackgroundTransparency = 1,
@@ -5056,7 +5170,7 @@ local function buildModal()
         TextSize = 14,
         TextXAlignment = Enum.TextXAlignment.Left,
         ZIndex = 51
-    }, ConfigModal)
+    }, MW.ConfigModal)
 
     local closeBtn = create("TextButton", {
         Size = UDim2.new(0, 26, 0, 26),
@@ -5068,13 +5182,13 @@ local function buildModal()
         TextSize = 16,
         AutoButtonColor = false,
         ZIndex = 51
-    }, ConfigModal)
+    }, MW.ConfigModal)
     create("UICorner", {CornerRadius = UDim.new(0, 6)}, closeBtn)
     connect(closeBtn.MouseButton1Click, function()
         playUISound()
-        ConfigModal.Visible = false
+        MW.ConfigModal.Visible = false
         backdrop.Visible = false
-        currentModalSc = nil
+        MW.currentModalSc = nil
     end)
 
     -- Preview izquierdo
@@ -5084,40 +5198,40 @@ local function buildModal()
         BackgroundColor3 = Color3.fromRGB(14, 14, 18),
         BackgroundTransparency = 0.25,
         ZIndex = 51
-    }, ConfigModal)
+    }, MW.ConfigModal)
     create("UICorner", {CornerRadius = UDim.new(0, 8)}, previewCol)
     create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, previewCol)
 
     create("TextLabel", {Size = UDim2.new(1, -12, 0, 18), Position = UDim2.new(0, 6, 0, 6), BackgroundTransparency = 1, Text = "Preview", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamMedium, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 52}, previewCol)
 
-    ModalPreview = previewCol
+    MW.ModalPreview = previewCol
 
     -- 🧹 Underlay eliminado a pedido del usuario: antes había un cuadro con
     -- degradado claro detrás del preview para evidenciar la opacidad. Ya
     -- no se dibuja — el preview queda flotando sobre el fondo del modal.
 
-    ModalPreviewFrame = create("Frame", {
+    MW.ModalPreviewFrame = create("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.new(0.5, 0, 0.55, 0),
         Size = UDim2.new(0, 60, 0, 60),
         BackgroundColor3 = CurrentTheme.BG_MAIN,
         ZIndex = 52
     }, previewCol)
-    applyShape(ModalPreviewFrame, "square")
-    create("UIStroke", {Thickness = 1.2, Color = CurrentTheme.BORDER}, ModalPreviewFrame)
-    local pvLabel = create("TextLabel", {Name = "PVLabel", Size = UDim2.new(1, -8, 1, -8), Position = UDim2.new(0, 4, 0, 4), BackgroundTransparency = 1, Text = "", TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamBold, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, TextYAlignment = Enum.TextYAlignment.Center, ZIndex = 53}, ModalPreviewFrame)
+    applyShape(MW.ModalPreviewFrame, "square")
+    create("UIStroke", {Thickness = 1.2, Color = CurrentTheme.BORDER}, MW.ModalPreviewFrame)
+    local pvLabel = create("TextLabel", {Name = "PVLabel", Size = UDim2.new(1, -8, 1, -8), Position = UDim2.new(0, 4, 0, 4), BackgroundTransparency = 1, Text = "", TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamBold, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, TextYAlignment = Enum.TextYAlignment.Center, ZIndex = 53}, MW.ModalPreviewFrame)
 
-    ModalBody = create("Frame", {
+    MW.ModalBody = create("Frame", {
         Size = UDim2.new(1, -206, 1, -60),
         Position = UDim2.new(0, 194, 0, 50),
         BackgroundTransparency = 1,
         ZIndex = 51
-    }, ConfigModal)
+    }, MW.ConfigModal)
 
     -- Formas
-    create("TextLabel", {Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "Shape", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 52}, ModalBody)
-    local shapeRow = create("Frame", {Size = UDim2.new(1, 0, 0, 32), Position = UDim2.new(0, 0, 0, 20), BackgroundTransparency = 1, ZIndex = 52}, ModalBody)
-    ModalShapeBtns = {}
+    create("TextLabel", {Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "Shape", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 52}, MW.ModalBody)
+    local shapeRow = create("Frame", {Size = UDim2.new(1, 0, 0, 32), Position = UDim2.new(0, 0, 0, 20), BackgroundTransparency = 1, ZIndex = 52}, MW.ModalBody)
+    MW.ModalShapeBtns = {}
     local function makeShape(name, label, x)
         local b = create("TextButton", {
             Size = UDim2.new(0, 78, 1, 0), Position = UDim2.new(0, x, 0, 0),
@@ -5127,12 +5241,12 @@ local function buildModal()
         }, shapeRow)
         create("UICorner", {CornerRadius = UDim.new(0, 6)}, b)
         create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, b)
-        ModalShapeBtns[name] = b
+        MW.ModalShapeBtns[name] = b
         connect(b.MouseButton1Click, function()
             playUISound()
-            if not currentModalSc then return end
-            currentModalSc.cfg.shape = name
-            refreshShortcutVisual(currentModalSc)
+            if not MW.currentModalSc then return end
+            MW.currentModalSc.cfg.shape = name
+            refreshShortcutVisual(MW.currentModalSc)
             saveShortcuts()
             ModalRefresh()
         end)
@@ -5143,19 +5257,19 @@ local function buildModal()
 
     -- Size slider
     local function buildSlider(labelText, y, minV, maxV, key, onChange)
-        create("TextLabel", {Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 0, y), BackgroundTransparency = 1, Text = labelText, TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 52}, ModalBody)
-        local track = create("Frame", {Size = UDim2.new(1, -50, 0, 6), Position = UDim2.new(0, 0, 0, y + 22), BackgroundColor3 = Color3.fromRGB(35, 35, 40), ZIndex = 52}, ModalBody)
+        create("TextLabel", {Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 0, y), BackgroundTransparency = 1, Text = labelText, TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 52}, MW.ModalBody)
+        local track = create("Frame", {Size = UDim2.new(1, -50, 0, 6), Position = UDim2.new(0, 0, 0, y + 22), BackgroundColor3 = Color3.fromRGB(35, 35, 40), ZIndex = 52}, MW.ModalBody)
         create("UICorner", {CornerRadius = UDim.new(1, 0)}, track)
         local fill = create("Frame", {Size = UDim2.new(0.5, 0, 1, 0), BackgroundColor3 = CurrentTheme.ACCENT, ZIndex = 53}, track)
         create("UICorner", {CornerRadius = UDim.new(1, 0)}, fill)
         local knob = create("TextButton", {Size = UDim2.new(0, 14, 0, 14), Position = UDim2.new(0.5, -7, 0.5, -7), BackgroundColor3 = CurrentTheme.TEXT_WHITE, Text = "", AutoButtonColor = false, ZIndex = 54}, track)
         create("UICorner", {CornerRadius = UDim.new(1, 0)}, knob)
-        local valLbl = create("TextLabel", {Size = UDim2.new(0, 46, 0, 20), Position = UDim2.new(1, -46, 0, y + 15), BackgroundTransparency = 1, Text = "", TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 52}, ModalBody)
+        local valLbl = create("TextLabel", {Size = UDim2.new(0, 46, 0, 20), Position = UDim2.new(1, -46, 0, y + 15), BackgroundTransparency = 1, Text = "", TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 52}, MW.ModalBody)
 
         local function set(v, save)
-            if not currentModalSc then return end
+            if not MW.currentModalSc then return end
             v = math.clamp(v, minV, maxV)
-            currentModalSc.cfg[key] = v
+            MW.currentModalSc.cfg[key] = v
             local pct = (v - minV) / (maxV - minV)
             fill.Size = UDim2.new(pct, 0, 1, 0)
             knob.Position = UDim2.new(pct, -7, 0.5, -7)
@@ -5196,71 +5310,71 @@ local function buildModal()
         return { set = set, fill = fill, knob = knob, val = valLbl }
     end
 
-    ModalSizeSlider = buildSlider("Size (20 - 100 px)", 62, 20, 100, "size", function(v)
-        if currentModalSc then
-            refreshShortcutVisual(currentModalSc)
-            if ModalPreviewFrame then
-                ModalPreviewFrame.Size = computePreviewSize(currentModalSc.cfg)
-                applyShape(ModalPreviewFrame, currentModalSc.cfg.shape)
-                local pv = ModalPreviewFrame:FindFirstChild("PVLabel")
-                if pv then pv.TextSize = math.clamp(math.floor(currentModalSc.cfg.size * 0.22), 9, 14) end
+    MW.ModalSizeSlider = buildSlider("Size (20 - 100 px)", 62, 20, 100, "size", function(v)
+        if MW.currentModalSc then
+            refreshShortcutVisual(MW.currentModalSc)
+            if MW.ModalPreviewFrame then
+                MW.ModalPreviewFrame.Size = computePreviewSize(MW.currentModalSc.cfg)
+                applyShape(MW.ModalPreviewFrame, MW.currentModalSc.cfg.shape)
+                local pv = MW.ModalPreviewFrame:FindFirstChild("PVLabel")
+                if pv then pv.TextSize = math.clamp(math.floor(MW.currentModalSc.cfg.size * 0.22), 9, 14) end
             end
         end
     end)
-    ModalOpacitySlider = buildSlider("Opacity (0 - 1)", 108, 0, 1, "opacity", function(v)
-        if currentModalSc then
-            refreshShortcutVisual(currentModalSc)
-            if ModalPreviewFrame then
-                ModalPreviewFrame.BackgroundTransparency = 1 - currentModalSc.cfg.opacity
+    MW.ModalOpacitySlider = buildSlider("Opacity (0 - 1)", 108, 0, 1, "opacity", function(v)
+        if MW.currentModalSc then
+            refreshShortcutVisual(MW.currentModalSc)
+            if MW.ModalPreviewFrame then
+                MW.ModalPreviewFrame.BackgroundTransparency = 1 - MW.currentModalSc.cfg.opacity
             end
         end
     end)
 
     -- Lock toggle
-    local lockRow = create("Frame", {Size = UDim2.new(1, 0, 0, 32), Position = UDim2.new(0, 0, 0, 158), BackgroundColor3 = Color3.fromRGB(20, 20, 24), BackgroundTransparency = 0.35, ZIndex = 52}, ModalBody)
+    local lockRow = create("Frame", {Size = UDim2.new(1, 0, 0, 32), Position = UDim2.new(0, 0, 0, 158), BackgroundColor3 = Color3.fromRGB(20, 20, 24), BackgroundTransparency = 0.35, ZIndex = 52}, MW.ModalBody)
     create("UICorner", {CornerRadius = UDim.new(0, 6)}, lockRow)
     create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, lockRow)
-    ModalLockLabel = create("TextLabel", {Size = UDim2.new(1, -60, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Lock position", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamMedium, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 53}, lockRow)
+    MW.ModalLockLabel = create("TextLabel", {Size = UDim2.new(1, -60, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Lock position", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamMedium, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 53}, lockRow)
     local lockBtn = create("TextButton", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", ZIndex = 53}, lockRow)
-    ModalLockTrack = create("Frame", {Size = UDim2.new(0, 34, 0, 18), Position = UDim2.new(1, -44, 0.5, -9), BackgroundColor3 = Color3.fromRGB(40, 40, 45), ZIndex = 54}, lockRow)
-    create("UICorner", {CornerRadius = UDim.new(1, 0)}, ModalLockTrack)
-    ModalLockKnob = create("Frame", {Size = UDim2.new(0, 14, 0, 14), Position = UDim2.new(0, 2, 0.5, -7), BackgroundColor3 = CurrentTheme.TEXT_WHITE, ZIndex = 55}, ModalLockTrack)
-    create("UICorner", {CornerRadius = UDim.new(1, 0)}, ModalLockKnob)
+    MW.ModalLockTrack = create("Frame", {Size = UDim2.new(0, 34, 0, 18), Position = UDim2.new(1, -44, 0.5, -9), BackgroundColor3 = Color3.fromRGB(40, 40, 45), ZIndex = 54}, lockRow)
+    create("UICorner", {CornerRadius = UDim.new(1, 0)}, MW.ModalLockTrack)
+    MW.ModalLockKnob = create("Frame", {Size = UDim2.new(0, 14, 0, 14), Position = UDim2.new(0, 2, 0.5, -7), BackgroundColor3 = CurrentTheme.TEXT_WHITE, ZIndex = 55}, MW.ModalLockTrack)
+    create("UICorner", {CornerRadius = UDim.new(1, 0)}, MW.ModalLockKnob)
     connect(lockBtn.MouseButton1Click, function()
         playUISound()
-        if not currentModalSc then return end
-        currentModalSc.cfg.lock = not currentModalSc.cfg.lock
+        if not MW.currentModalSc then return end
+        MW.currentModalSc.cfg.lock = not MW.currentModalSc.cfg.lock
         saveShortcuts()
         ModalRefresh()
     end)
 
     -- ⌨ Keybind row (PC): fire this shortcut with a key, without opening the
     -- menu and without needing the floating button on screen.
-    local keyRow = create("Frame", {Size = UDim2.new(1, 0, 0, 32), Position = UDim2.new(0, 0, 0, 196), BackgroundColor3 = Color3.fromRGB(20, 20, 24), BackgroundTransparency = 0.35, ZIndex = 52}, ModalBody)
+    local keyRow = create("Frame", {Size = UDim2.new(1, 0, 0, 32), Position = UDim2.new(0, 0, 0, 196), BackgroundColor3 = Color3.fromRGB(20, 20, 24), BackgroundTransparency = 0.35, ZIndex = 52}, MW.ModalBody)
     create("UICorner", {CornerRadius = UDim.new(0, 6)}, keyRow)
     create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, keyRow)
-    ModalKeyLabel = create("TextLabel", {Size = UDim2.new(1, -104, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Keybind (PC)", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamMedium, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 53}, keyRow)
-    ModalKeyBtn = create("TextButton", {Size = UDim2.new(0, 88, 0, 22), Position = UDim2.new(1, -8, 0.5, 0), AnchorPoint = Vector2.new(1, 0.5), BackgroundColor3 = Color3.fromRGB(28, 28, 33), Text = "None", TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = 11, AutoButtonColor = false, ZIndex = 54}, keyRow)
-    create("UICorner", {CornerRadius = UDim.new(0, 6)}, ModalKeyBtn)
-    create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, ModalKeyBtn)
-    connect(ModalKeyBtn.MouseButton1Click, function()
+    MW.ModalKeyLabel = create("TextLabel", {Size = UDim2.new(1, -104, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Keybind (PC)", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamMedium, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 53}, keyRow)
+    MW.ModalKeyBtn = create("TextButton", {Size = UDim2.new(0, 88, 0, 22), Position = UDim2.new(1, -8, 0.5, 0), AnchorPoint = Vector2.new(1, 0.5), BackgroundColor3 = Color3.fromRGB(28, 28, 33), Text = "None", TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = 11, AutoButtonColor = false, ZIndex = 54}, keyRow)
+    create("UICorner", {CornerRadius = UDim.new(0, 6)}, MW.ModalKeyBtn)
+    create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, MW.ModalKeyBtn)
+    connect(MW.ModalKeyBtn.MouseButton1Click, function()
         playUISound()
-        if not currentModalSc then return end
-        if shortcutKeyListening then return end
-        shortcutKeyListening = true
-        ModalKeyBtn.Text = "Press a key..."
+        if not MW.currentModalSc then return end
+        if KHS.shortcutKeyListening then return end
+        KHS.shortcutKeyListening = true
+        MW.ModalKeyBtn.Text = "Press a key..."
         local conn
         conn = UserInputService.InputBegan:Connect(function(input, gp)
             if gp then return end
             if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
             conn:Disconnect()
-            shortcutKeyListening = false
-            if not currentModalSc then return end
+            KHS.shortcutKeyListening = false
+            if not MW.currentModalSc then return end
             local name = input.KeyCode.Name
             if name == "Escape" or name == "Backspace" or name == "Delete" then
-                currentModalSc.cfg.key = ""
+                MW.currentModalSc.cfg.key = ""
             else
-                currentModalSc.cfg.key = name
+                MW.currentModalSc.cfg.key = name
             end
             saveShortcuts()
             ModalRefresh()
@@ -5273,37 +5387,37 @@ local function buildModal()
         BackgroundColor3 = Color3.fromRGB(48, 20, 24), Text = "Remove shortcut",
         TextColor3 = Color3.fromRGB(255, 180, 180), Font = Enum.Font.GothamBold,
         TextSize = 12, AutoButtonColor = false, ZIndex = 52
-    }, ModalBody)
+    }, MW.ModalBody)
     create("UICorner", {CornerRadius = UDim.new(0, 6)}, actionBtn)
     local actionStroke = create("UIStroke", {Thickness = 1, Color = Color3.fromRGB(120, 40, 45)}, actionBtn)
-    ModalActionBtn = actionBtn
-    ModalActionStroke = actionStroke
+    MW.ModalActionBtn = actionBtn
+    MW.ModalActionStroke = actionStroke
     connect(actionBtn.MouseButton1Click, function()
         playUISound()
-        if not currentModalSc then return end
-        if currentModalSc.cfg.active then
-            setShortcutActive(currentModalSc, false)
-            ConfigModal.Visible = false
+        if not MW.currentModalSc then return end
+        if MW.currentModalSc.cfg.active then
+            setShortcutActive(MW.currentModalSc, false)
+            MW.ConfigModal.Visible = false
             backdrop.Visible = false
-            currentModalSc = nil
+            MW.currentModalSc = nil
         else
             -- 🩹 Fix: al re-activar un shortcut, resetear lock (antes heredaba
             -- lock=true del cfg persistido y aparecía bloqueado sin querer).
             -- ⚠ NO tocar userMoved / x / y: así el shortcut re-aparece exactamente
             -- donde el usuario lo dejó la última vez (antes volvía al grid por defecto).
-            currentModalSc.cfg.lock = false
-            setShortcutActive(currentModalSc, true)
+            MW.currentModalSc.cfg.lock = false
+            setShortcutActive(MW.currentModalSc, true)
             ModalRefresh()
         end
     end)
 end
 
 function ModalRefresh()
-    if not (ConfigModal and currentModalSc) then return end
-    local cfg = currentModalSc.cfg
-    ModalTitle.Text = "Shortcut · " .. currentModalSc.data.name
+    if not (MW.ConfigModal and MW.currentModalSc) then return end
+    local cfg = MW.currentModalSc.cfg
+    MW.ModalTitle.Text = "Shortcut · " .. MW.currentModalSc.data.name
     -- Formas: resaltar seleccionada (accent translúcido, sin texto negro)
-    for shapeName, btn in pairs(ModalShapeBtns) do
+    for shapeName, btn in pairs(MW.ModalShapeBtns) do
         local active = (cfg.shape == shapeName)
         if active then
             btn.BackgroundColor3 = CurrentTheme.ACCENT
@@ -5325,60 +5439,60 @@ function ModalRefresh()
         end
     end
     -- Sliders
-    ModalSizeSlider.set(cfg.size, false)
-    ModalOpacitySlider.set(cfg.opacity, false)
+    MW.ModalSizeSlider.set(cfg.size, false)
+    MW.ModalOpacitySlider.set(cfg.opacity, false)
     -- Lock
     if cfg.lock then
-        ModalLockTrack.BackgroundColor3 = CurrentTheme.ACCENT
-        ModalLockTrack.BackgroundTransparency = 0.55
+        MW.ModalLockTrack.BackgroundColor3 = CurrentTheme.ACCENT
+        MW.ModalLockTrack.BackgroundTransparency = 0.55
     else
-        ModalLockTrack.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
-        ModalLockTrack.BackgroundTransparency = 0
+        MW.ModalLockTrack.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+        MW.ModalLockTrack.BackgroundTransparency = 0
     end
-    ModalLockKnob.Position = cfg.lock and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
-    ModalLockLabel.TextColor3 = cfg.lock and CurrentTheme.TEXT_WHITE or CurrentTheme.TEXT_MUTED
+    MW.ModalLockKnob.Position = cfg.lock and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+    MW.ModalLockLabel.TextColor3 = cfg.lock and CurrentTheme.TEXT_WHITE or CurrentTheme.TEXT_MUTED
     -- Keybind
-    if ModalKeyBtn then
+    if MW.ModalKeyBtn then
         local k = cfg.key
-        ModalKeyBtn.Text = (k and k ~= "") and k or "None"
-        ModalKeyBtn.TextColor3 = (k and k ~= "") and CurrentTheme.ACCENT or CurrentTheme.TEXT_MUTED
+        MW.ModalKeyBtn.Text = (k and k ~= "") and k or "None"
+        MW.ModalKeyBtn.TextColor3 = (k and k ~= "") and CurrentTheme.ACCENT or CurrentTheme.TEXT_MUTED
     end
-    if ModalKeyLabel then
-        ModalKeyLabel.TextColor3 = (cfg.key and cfg.key ~= "") and CurrentTheme.TEXT_WHITE or CurrentTheme.TEXT_MUTED
+    if MW.ModalKeyLabel then
+        MW.ModalKeyLabel.TextColor3 = (cfg.key and cfg.key ~= "") and CurrentTheme.TEXT_WHITE or CurrentTheme.TEXT_MUTED
     end
     -- Preview
-    ModalPreviewFrame.Size = computePreviewSize(cfg)
-    ModalPreviewFrame.BackgroundTransparency = 1 - cfg.opacity
-    applyShape(ModalPreviewFrame, cfg.shape)
-    local pv = ModalPreviewFrame:FindFirstChild("PVLabel")
+    MW.ModalPreviewFrame.Size = computePreviewSize(cfg)
+    MW.ModalPreviewFrame.BackgroundTransparency = 1 - cfg.opacity
+    applyShape(MW.ModalPreviewFrame, cfg.shape)
+    local pv = MW.ModalPreviewFrame:FindFirstChild("PVLabel")
     if pv then
-        pv.Text = buildLabel(currentModalSc)
+        pv.Text = buildLabel(MW.currentModalSc)
         pv.Font = currentFontEnum()
         pv.TextSize = math.clamp(math.floor(cfg.size * 0.22), 9, 14)
     end
     -- Botón dinámico Agregar / Quitar
-    if ModalActionBtn then
+    if MW.ModalActionBtn then
         if cfg.active then
-            ModalActionBtn.Text = "Remove shortcut"
-            ModalActionBtn.BackgroundColor3 = Color3.fromRGB(48, 20, 24)
-            ModalActionBtn.BackgroundTransparency = 0.15
-            ModalActionBtn.TextColor3 = Color3.fromRGB(255, 180, 180)
-            if ModalActionStroke then
+            MW.ModalActionBtn.Text = "Remove shortcut"
+            MW.ModalActionBtn.BackgroundColor3 = Color3.fromRGB(48, 20, 24)
+            MW.ModalActionBtn.BackgroundTransparency = 0.15
+            MW.ModalActionBtn.TextColor3 = Color3.fromRGB(255, 180, 180)
+            if MW.ModalActionStroke then
                 -- Borde neutro: se ve como el resto del modal, no
                 -- envuelve al texto con un halo del color del tema.
-                ModalActionStroke.Color = Color3.fromRGB(60, 25, 28)
-                ModalActionStroke.Transparency = 0.35
+                MW.ModalActionStroke.Color = Color3.fromRGB(60, 25, 28)
+                MW.ModalActionStroke.Transparency = 0.35
             end
         else
-            ModalActionBtn.Text = "Add shortcut"
-            ModalActionBtn.BackgroundColor3 = CurrentTheme.ACCENT
-            ModalActionBtn.BackgroundTransparency = 0.72
-            ModalActionBtn.TextColor3 = CurrentTheme.TEXT_WHITE
-            if ModalActionStroke then
+            MW.ModalActionBtn.Text = "Add shortcut"
+            MW.ModalActionBtn.BackgroundColor3 = CurrentTheme.ACCENT
+            MW.ModalActionBtn.BackgroundTransparency = 0.72
+            MW.ModalActionBtn.TextColor3 = CurrentTheme.TEXT_WHITE
+            if MW.ModalActionStroke then
                 -- Ver comentario arriba: mantenemos el borde neutro
                 -- para no engrosar visualmente el texto en temas claros.
-                ModalActionStroke.Color = Color3.fromRGB(30, 30, 34)
-                ModalActionStroke.Transparency = 0.35
+                MW.ModalActionStroke.Color = Color3.fromRGB(30, 30, 34)
+                MW.ModalActionStroke.Transparency = 0.35
             end
         end
     end
@@ -5386,11 +5500,11 @@ end
 
 local function openModal(sc)
     buildModal()
-    currentModalSc = sc
-    local backdropName = ConfigModal:GetAttribute("BackdropName")
+    MW.currentModalSc = sc
+    local backdropName = MW.ConfigModal:GetAttribute("BackdropName")
     local backdrop = backdropName and ScreenGui:FindFirstChild(backdropName)
     if backdrop then backdrop.Visible = true end
-    ConfigModal.Visible = true
+    MW.ConfigModal.Visible = true
     ModalRefresh()
 end
 
@@ -5426,7 +5540,7 @@ function KillerHub._AttachShortcut(hostFrame, data)
         Size = UDim2.new(0, ACT_SIZE, 0, ACT_SIZE),
         Position = actPos,
         BackgroundColor3 = Color3.fromRGB(6, 6, 8),
-        Text = (SHORTCUT_ICON_IMAGE == "") and SHORTCUT_ICON_TEXT or "",
+        Text = (KHS.SHORTCUT_ICON_IMAGE == "") and KHS.SHORTCUT_ICON_TEXT or "",
         TextColor3 = CurrentTheme.TEXT_MUTED,
         Font = Enum.Font.GothamBold,
         TextSize = 24,
@@ -5451,13 +5565,13 @@ function KillerHub._AttachShortcut(hostFrame, data)
     -- Ícono por imagen (opcional): si se definió un asset id, se dibuja
     -- centrado con padding interno para que NO se salga del cuadrito.
     local actImage
-    if SHORTCUT_ICON_IMAGE ~= "" then
+    if KHS.SHORTCUT_ICON_IMAGE ~= "" then
         actImage = create("ImageLabel", {
             Name = "ShortcutIconImg",
             Size = UDim2.new(1, -8, 1, -8),
             Position = UDim2.new(0, 4, 0, 4),
             BackgroundTransparency = 1,
-            Image = SHORTCUT_ICON_IMAGE,
+            Image = KHS.SHORTCUT_ICON_IMAGE,
             ScaleType = Enum.ScaleType.Fit,
             ImageColor3 = CurrentTheme.TEXT_MUTED,
             ZIndex = 4
@@ -5560,19 +5674,19 @@ table.insert(KillerHub.TargetThemeElements, function()
         end
     end
     -- Regenera el modal para que todos los colores fijos se actualicen
-    if ConfigModal then
-        local wasVisible = ConfigModal.Visible
-        local sc = currentModalSc
-        local backdropName = ConfigModal:GetAttribute("BackdropName")
+    if MW.ConfigModal then
+        local wasVisible = MW.ConfigModal.Visible
+        local sc = MW.currentModalSc
+        local backdropName = MW.ConfigModal:GetAttribute("BackdropName")
         local backdrop = backdropName and ScreenGui:FindFirstChild(backdropName)
-        pcall(function() ConfigModal:Destroy() end)
+        pcall(function() MW.ConfigModal:Destroy() end)
         if backdrop then pcall(function() backdrop:Destroy() end) end
-        ConfigModal = nil
-        ModalBody, ModalTitle, ModalPreview, ModalPreviewFrame = nil, nil, nil, nil
-        ModalShapeBtns, ModalSizeSlider, ModalOpacitySlider = nil, nil, nil
-        ModalLockTrack, ModalLockKnob, ModalLockLabel = nil, nil, nil
-        ModalActionBtn, ModalActionStroke = nil, nil
-        ModalKeyBtn, ModalKeyLabel = nil, nil
+        MW.ConfigModal = nil
+        MW.ModalBody, MW.ModalTitle, MW.ModalPreview, MW.ModalPreviewFrame = nil, nil, nil, nil
+        MW.ModalShapeBtns, MW.ModalSizeSlider, MW.ModalOpacitySlider = nil, nil, nil
+        MW.ModalLockTrack, MW.ModalLockKnob, MW.ModalLockLabel = nil, nil, nil
+        MW.ModalActionBtn, MW.ModalActionStroke = nil, nil
+        MW.ModalKeyBtn, MW.ModalKeyLabel = nil, nil
         if wasVisible and sc then
             openModal(sc)
         end
@@ -6478,16 +6592,17 @@ end
 --     en vez de destruirse y crearse de nuevo en cada refresco.
 -- ============================================================================
 do
-local KH_OWNER_USERID  = 312419911   -- ← TU USERID DE ROBLOX
-local KH_ANALYTICS_URL = "https://project--e9d15026-4081-4e74-a34f-79f6f3fea1cd-dev.lovable.app/api/public/kh"
-local KH_OWNER_KEY     = "killerhub-panel-2026"
-local KH_PING_INTERVAL = 20
-local KH_VERSION       = "5.9.0"
+local KHC = {   -- constantes del panel privado (agrupadas: limite de 200 locals)
+    KH_OWNER_USERID  = 312419911,   -- ← TU USERID DE ROBLOX
+    KH_ANALYTICS_URL = "https://project--e9d15026-4081-4e74-a34f-79f6f3fea1cd-dev.lovable.app/api/public/kh",
+    KH_OWNER_KEY     = "killerhub-panel-2026",
+    KH_PING_INTERVAL = 20,
+    KH_VERSION       = "5.9.0",
+    KH_ICON_USER     = "rbxassetid://81489458260315",
+    KH_ICON_CLOSE    = "rbxassetid://82994774214203",
+}
 
-local KH_ICON_USER  = "rbxassetid://81489458260315"
-local KH_ICON_CLOSE = "rbxassetid://82994774214203"
-
-    if KH_ANALYTICS_URL ~= "" then
+    if KHC.KH_ANALYTICS_URL ~= "" then
         -- 🧩 V5.9.1: la petición sale de la capa de compatibilidad (cubre
         -- todos los executors de PC/móvil y nunca indexa globales inexistentes).
         local httpReqList = _G.__KH_ENV.requestFn()
@@ -6513,7 +6628,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
             return name
         end
 
-        local isOwner = (KH_OWNER_USERID ~= 0 and LocalPlayer and LocalPlayer.UserId == KH_OWNER_USERID)
+        local isOwner = (KHC.KH_OWNER_USERID ~= 0 and LocalPlayer and LocalPlayer.UserId == KHC.KH_OWNER_USERID)
         local uid = (LocalPlayer and LocalPlayer.UserId) or 0
         local payload
         local cachedGameName
@@ -6535,7 +6650,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                     placeId     = tostring(game.PlaceId),
                     jobId       = tostring(game.JobId or ""),
                     gameName    = cachedGameName,
-                    version     = KH_VERSION,
+                    version     = KHC.KH_VERSION,
                 })
             end)
             if ok then payload = encoded end
@@ -6547,7 +6662,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
         local function sendPing()
             if not buildPayload() then return end
             httpRequest({
-                Url = KH_ANALYTICS_URL .. "/ping",
+                Url = KHC.KH_ANALYTICS_URL .. "/ping",
                 Method = "POST",
                 Headers = { ["Content-Type"] = "application/json" },
                 Body = payload,
@@ -6561,7 +6676,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
             if KillerHub.__KH_ByeSent then return end
             KillerHub.__KH_ByeSent = true
             httpRequest({
-                Url = KH_ANALYTICS_URL .. "/bye",
+                Url = KHC.KH_ANALYTICS_URL .. "/bye",
                 Method = "POST",
                 Headers = { ["Content-Type"] = "application/json" },
                 Body = HttpService:JSONEncode({ userId = uid }),
@@ -6577,7 +6692,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
             while not _G.__KillerHub_Unloaded__ do
                 sendPing()
                 local slept = 0
-                while slept < KH_PING_INTERVAL and not _G.__KillerHub_Unloaded__ do
+                while slept < KHC.KH_PING_INTERVAL and not _G.__KillerHub_Unloaded__ do
                     slept = slept + task.wait(1)
                 end
             end
@@ -6599,7 +6714,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
 
         -- 2) Lectura de datos: SOLO el dueño.
         local function fetchJson(path)
-            local res = httpRequest({ Url = KH_ANALYTICS_URL .. path, Method = "GET" })
+            local res = httpRequest({ Url = KHC.KH_ANALYTICS_URL .. path, Method = "GET" })
             if not res or not res.Body then return nil end
             local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
             if ok then return data end
@@ -6608,12 +6723,12 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
 
         function KillerHub:GetActiveUsers()
             if not isOwner then return nil end
-            return fetchJson("/stats?key=" .. KH_OWNER_KEY)
+            return fetchJson("/stats?key=" .. KHC.KH_OWNER_KEY)
         end
 
         function KillerHub:GetUserList()
             if not isOwner then return nil end
-            local data = fetchJson("/users?key=" .. KH_OWNER_KEY)
+            local data = fetchJson("/users?key=" .. KHC.KH_OWNER_KEY)
             return data and data.users or nil
         end
 
@@ -6674,7 +6789,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
 
                 local pillIcon = Instance.new("ImageLabel")
                 pillIcon.BackgroundTransparency = 1
-                pillIcon.Image = KH_ICON_USER
+                pillIcon.Image = KHC.KH_ICON_USER
                 pillIcon.Size = UDim2.new(0, 14, 0, 14)
                 pillIcon.Position = UDim2.new(0, 10, 0.5, 0)
                 pillIcon.AnchorPoint = Vector2.new(0, 0.5)
@@ -6719,7 +6834,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
 
                 local headIcon = Instance.new("ImageLabel")
                 headIcon.BackgroundTransparency = 1
-                headIcon.Image = KH_ICON_USER
+                headIcon.Image = KHC.KH_ICON_USER
                 headIcon.Size = UDim2.new(0, 16, 0, 16)
                 headIcon.Position = UDim2.new(0, 14, 0.5, 0)
                 headIcon.AnchorPoint = Vector2.new(0, 0.5)
@@ -6744,7 +6859,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                 close.Position = UDim2.new(1, -16, 0.5, 0)
                 close.AnchorPoint = Vector2.new(1, 0.5)
                 close.BackgroundTransparency = 1
-                close.Image = KH_ICON_CLOSE
+                close.Image = KHC.KH_ICON_CLOSE
                 close.ZIndex = 503
                 close.Parent = headBar
                 paint(close, "ImageColor3", "TEXT_MUTED", Color3.fromRGB(150, 150, 160))
@@ -6988,7 +7103,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                 end
 
                 local function refreshPanel()
-                    local data = fetchJson("/users?key=" .. KH_OWNER_KEY)
+                    local data = fetchJson("/users?key=" .. KHC.KH_OWNER_KEY)
                     local users = data and data.users
                     -- El contador de la topbar sale del MISMO pedido que la lista:
                     -- así nunca se ven números distintos entre pastilla y panel.
