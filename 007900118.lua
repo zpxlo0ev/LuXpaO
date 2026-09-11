@@ -1,30 +1,5 @@
 -- ============================================================================
--- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.10.0)
--- Changelog V5.10.0 (miniaturas + UX + rendimiento):
---   • 🖼 MINIATURAS AUTOMÁTICAS EN DROPDOWNS, SIN CAMBIAR LA API. Cualquier
---     CreateDropdown / CreateMultiDropdown que YA exista las gana solo:
---       – Opción con nombre / DisplayName / "@nombre" / UserId de un jugador
---         del servidor  →  se dibuja su FOTO DE PERFIL (rbxthumb, headshot).
---       – Opción "rbxassetid://123456" o un ID numérico (5+ dígitos)
---         →  se dibuja la IMAGEN de esa textura.
---       – Cualquier otra opción se ve exactamente igual que antes.
---     Todo va cacheado y el índice de jugadores se reconstruye POR EVENTO
---     (PlayerAdded / PlayerRemoving), nunca en bucle. Apagable en
---     Settings ▸ General ▸ "Dropdown previews" o con
---     KillerHub:SetOptionPreviews(false).
---   • 📐 Filas de dropdown más grandes (30 px, 38 px cuando llevan imagen) y
---     lista más alta (190 px). La miniatura de la opción elegida también sale
---     en la barra cerrada, y el texto se recorta solo: nada se sale de la barra.
---   • 📜 Al abrir un dropdown, un multi-dropdown o un color picker, la pestaña
---     se DESLIZA SOLA hasta que el panel abierto se vea completo.
---   • ⚡ Elegir una opción ya NO destruye y recrea la lista entera: solo se
---     repinta la selección (era el tirón de FPS al tocar un dropdown largo).
---   • ⚡ Refresh() ignora las listas idénticas y BindToDynamicList no consulta
---     nada mientras el hub está cerrado o la pestaña no está a la vista: los
---     dropdowns de jugadores dejaron de reconstruir 30 botones cada 2 s.
---   • ⚡ El alto de la lista se recalcula por evento del UIListLayout (una sola
---     suscripción) en vez de a mano en cada punto del código.
---   • 🆕 mddObj (multi-dropdown) ahora también tiene Refresh y BindToDynamicList.
+-- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.1)
 -- Changelog V5.9.1 (compatibilidad + rendimiento):
 --   • 🖥 SOPORTE UNIVERSAL DE EJECUTORES (PC / Android / iOS). El error
 --     "no se puede cargar la UI library" en PC venía de 4 puntos que NO
@@ -210,6 +185,7 @@
 --     ColorSequence (arranque y cambio de tema), no por frame.
 -- ============================================================================
 
+local KHX = {}
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
@@ -392,129 +368,13 @@ local function resolveIcon(id)
     return id -- último recurso: devolver tal cual
 end
 
--- ============================================================================
--- 🖼️ V5.10 PREVIEW ENGINE  (miniaturas automáticas en dropdowns)
--- ----------------------------------------------------------------------------
--- NO cambia la API: cualquier dropdown/multidropdown que YA exista se beneficia
--- solo. Se mira el TEXTO de cada opción y se deduce la miniatura:
---   • "rbxassetid://123456"  /  "123456"   →  imagen de la textura
---   • Nombre / DisplayName / "@Nombre" / "Display (@Nombre)" / UserId de un
---     jugador del servidor                 →  foto de perfil (rbxthumb)
--- Todo va cacheado (tabla en _G, cero locals nuevos: el chunk está al tope de
--- los 200 locals de Luau) y el índice de jugadores se reconstruye por EVENTO
--- (PlayerAdded / PlayerRemoving), nunca en bucle.
--- Se puede apagar con:  KillerHub:SetOptionPreviews(false)
--- ============================================================================
-do
-    local E = _G.__KH_ENV
-    if E.previewsEnabled == nil then E.previewsEnabled = true end
-    local cache = {}
-    local playerIndex = {}
-    local dirty = true
-
-    local function rebuildIndex()
-        table.clear(playerIndex)
-        local ok = pcall(function()
-            for _, plr in ipairs(Players:GetPlayers()) do
-                local uid = plr.UserId
-                playerIndex[plr.Name:lower()] = uid
-                playerIndex[("@" .. plr.Name):lower()] = uid
-                playerIndex[plr.DisplayName:lower()] = uid
-                playerIndex[(plr.DisplayName .. " (@" .. plr.Name .. ")"):lower()] = uid
-                playerIndex[(plr.DisplayName .. " (" .. plr.Name .. ")"):lower()] = uid
-                playerIndex[(plr.Name .. " (" .. plr.DisplayName .. ")"):lower()] = uid
-                playerIndex[tostring(uid)] = uid
-            end
-        end)
-        dirty = not ok
-    end
-
-    pcall(function()
-        Players.PlayerAdded:Connect(function() dirty = true table.clear(cache) end)
-        Players.PlayerRemoving:Connect(function() dirty = true table.clear(cache) end)
-    end)
-
-    -- Devuelve una URL de imagen para el texto de la opción, o nil.
-    function E.preview(text)
-        if not E.previewsEnabled then return nil end
-        if type(text) ~= "string" or text == "" or #text > 120 then return nil end
-        local hit = cache[text]
-        if hit ~= nil then return hit or nil end
-
-        local img = false
-        if text:match("^rbxthumb://") then
-            img = text
-        elseif text:match("^rbxassetid://%d+") then
-            img = "rbxassetid://" .. text:match("rbxassetid://(%d+)")
-        else
-            local pure = text:match("^%s*(%d+)%s*$")
-            if pure then
-                if dirty then rebuildIndex() end
-                local uid = playerIndex[pure]
-                if uid then
-                    img = "rbxthumb://type=AvatarHeadShot&id=" .. uid .. "&w=60&h=60"
-                elseif #pure >= 5 then
-                    img = "rbxassetid://" .. pure
-                end
-            else
-                local embedded = text:match("rbxassetid://(%d+)")
-                if embedded then
-                    img = "rbxassetid://" .. embedded
-                else
-                    if dirty then rebuildIndex() end
-                    local uid = playerIndex[text:lower()]
-                    if not uid then
-                        -- limpia prefijos tipo "[1] " y sufijos tipo " (nivel 3)"
-                        local clean = text:gsub("^%s*%[.-%]%s*", ""):gsub("%s*%b()%s*$", ""):gsub("^@", "")
-                        clean = clean:match("^%s*(.-)%s*$") or clean
-                        if clean ~= "" then uid = playerIndex[clean:lower()] end
-                    end
-                    if uid then img = "rbxthumb://type=AvatarHeadShot&id=" .. uid .. "&w=60&h=60" end
-                end
-            end
-        end
-
-        cache[text] = img
-        return img or nil
-    end
-
-    function E.clearPreviewCache() table.clear(cache) dirty = true end
-
-    -- 📜 Desliza automáticamente el contenedor para que el elemento recién
-    -- abierto (dropdown, color picker) quede completo a la vista.
-    function E.scrollIntoView(element, delay)
-        if typeof(element) ~= "Instance" then return end
-        local scroller = element.Parent
-        while scroller and not scroller:IsA("ScrollingFrame") do scroller = scroller.Parent end
-        if not scroller then return end
-        task.delay(delay or 0.16, function()
-            if not element.Parent or not scroller.Parent then return end
-            local view = scroller.AbsoluteWindowSize.Y
-            if view <= 0 then return end
-            local top = (element.AbsolutePosition.Y - scroller.AbsolutePosition.Y) + scroller.CanvasPosition.Y
-            local bottom = top + element.AbsoluteSize.Y + 10
-            local target = scroller.CanvasPosition.Y
-            if bottom > target + view then target = bottom - view end
-            if top < target then target = top - 8 end
-            local maxY = math.max(scroller.AbsoluteCanvasSize.Y - view, 0)
-            target = math.clamp(target, 0, maxY)
-            if math.abs(target - scroller.CanvasPosition.Y) < 2 then return end
-            TweenService:Create(
-                scroller,
-                TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
-                {CanvasPosition = Vector2.new(scroller.CanvasPosition.X, target)}
-            ):Play()
-        end)
-    end
-end
 
 
-
--- 🛠 ANTI-CRASH UNIVERSAL INTEGRADO (GetSafeUIParent)
+-- 🛠 ANTI-CRASH UNIVERSAL INTEGRADO (KHX.GetSafeUIParent)
 -- 🧩 V5.9.1: se prueban en orden gethui() → CoreGui (con prueba real de
 -- escritura) → PlayerGui. En varios executors de PC, CoreGui existe pero
 -- parentar ahí lanza error de permisos: antes eso mataba la carga del hub.
-local function GetSafeUIParent()
+function KHX.GetSafeUIParent()
     local ok, hui = pcall(function()
         local f = _G.__KH_ENV.g("gethui")
         return type(f) == "function" and f() or nil
@@ -540,7 +400,7 @@ local function GetSafeUIParent()
     return LocalPlayer:WaitForChild("PlayerGui")
 end
 
-local TargetParent = GetSafeUIParent()
+local TargetParent = KHX.GetSafeUIParent()
 
 pcall(function()
     local old = TargetParent:FindFirstChild("KillerHub_Universal")
@@ -635,7 +495,7 @@ local CONFIG_FOLDER = "KillerHub_Config"
 -- listo — no hay dependencia de PlaceId por ningún lado.
 local UNIVERSAL_FILE = CONFIG_FOLDER .. "/Universal.json"
 -- Compatibilidad hacia atrás con instalaciones anteriores (se migran en silencio).
-local LEGACY_GLOBAL_FILE = CONFIG_FOLDER .. "/Global.json"
+KHX.LEGACY_GLOBAL_FILE = CONFIG_FOLDER .. "/Global.json"
 
 pcall(function()
     if isfolder and makefolder and not isfolder(CONFIG_FOLDER) then
@@ -643,7 +503,7 @@ pcall(function()
     end
 end)
 
-local DefaultConfig = {
+KHX.DefaultConfig = {
     Volume = 0.5, ToggleKey = "RightControl", SelectedTheme = "Obsidian", SelectedFont = "GothamMedium", MenuAnimEnabled = true, AutoArrangeShortcuts = true, DisableNotifications = false,
     GuiWidth = 0.466, GuiHeight = 0.4, UiOpacity = 0.75, ToggleBtnSize = 46,
     MainFrameX = 0, MainFrameY = 0, BtnX = 15, BtnY = 100, BackgroundEnabled = false,
@@ -674,12 +534,12 @@ local function connect(event, callback)
     return conn
 end
 
-local function copyTable(target, source)
+function KHX.copyTable(target, source)
     for k, v in pairs(source) do
-        if type(v) == "table" then target[k] = {} copyTable(target[k], v) else target[k] = v end
+        if type(v) == "table" then target[k] = {} KHX.copyTable(target[k], v) else target[k] = v end
     end
 end
-copyTable(Config, DefaultConfig)
+KHX.copyTable(Config, KHX.DefaultConfig)
 
 -- 🩹 AUTOGUARDADO UNIVERSAL: un solo archivo con TODA tu configuración.
 -- 1) Debounce de escritura: saveConfig() se llama en cada muestra de arrastre de
@@ -718,7 +578,7 @@ pcall(function()
     -- viejos, los importamos en orden (global primero, luego el del juego que
     -- hayas usado por última vez) y guardamos todo consolidado.
     if isfile and not isfile(UNIVERSAL_FILE) then
-        if isfile(LEGACY_GLOBAL_FILE) then _loadJsonInto(LEGACY_GLOBAL_FILE) end
+        if isfile(KHX.LEGACY_GLOBAL_FILE) then _loadJsonInto(KHX.LEGACY_GLOBAL_FILE) end
         if listfiles and isfolder and isfolder(CONFIG_FOLDER) then
             local okList, files = pcall(listfiles, CONFIG_FOLDER)
             if okList and type(files) == "table" then
@@ -748,14 +608,14 @@ if Themes[Config.SelectedTheme] then CurrentTheme = Themes[Config.SelectedTheme]
 -- cambiar de tema, porque nunca se generaba el atributo que SetTheme necesita
 -- para repintarlo. Ahora se compara contra las 9 claves del tema de forma
 -- generica y se cubre tambien ImageColor3 / ScrollBarImageColor3.
-local THEME_KEYS = {
+KHX.THEME_KEYS = {
     "BG_MAIN", "BG_SIDEBAR", "BG_SECONDARY", "ACCENT", "PREMIUM_GOLD",
     "TEXT_WHITE", "TEXT_MUTED", "BORDER", "GLOW"
 }
 
 local function matchThemeKey(color, t)
     if color == nil then return nil end
-    for _, key in ipairs(THEME_KEYS) do
+    for _, key in ipairs(KHX.THEME_KEYS) do
         if color == t[key] then return key end
     end
     -- Temas que no definen GLOW caen a ACCENT en tiempo de creacion; si el
@@ -765,7 +625,7 @@ local function matchThemeKey(color, t)
     return nil
 end
 
-local function tagThemed(obj, properties)
+function KHX.tagThemed(obj, properties)
     local t = CurrentTheme
     local tc = matchThemeKey(properties.TextColor3, t)
     if tc then obj:SetAttribute("ThemeText", tc) end
@@ -791,7 +651,7 @@ end
 -- viviendo en UNA sola conexión Heartbeat (una escritura de Rotation por
 -- gradiente, sin Instances ni tweens por frame) y se refresca a ~30 Hz.
 local InnerBorderGradients = {}
-local INNER_BORDER_LIMIT = 700 -- V5.4.9: antes 160 -> las últimas pestañas (Troll, Modify...) se quedaban sin borde animado
+KHX.INNER_BORDER_LIMIT = 700 -- V5.4.9: antes 160 -> las últimas pestañas (Troll, Modify...) se quedaban sin borde animado
 local _registerInnerStroke = nil -- se asigna cuando _borderSeq ya existe
 local _shortcutBorderColor = nil -- forward: se asigna junto a getShortcutBorder()
 
@@ -815,7 +675,7 @@ local function create(instanceType, properties, parent)
     if instanceType == "UIStroke" and properties.ApplyStrokeMode == nil then
         pcall(function() obj.ApplyStrokeMode = Enum.ApplyStrokeMode.Border end)
     end
-    pcall(tagThemed, obj, properties)
+    pcall(KHX.tagThemed, obj, properties)
     -- 🧼 Higiene visual: fuerza TextStrokeTransparency = 1 en cualquier texto
     -- salvo que el llamador lo haya definido explicitamente. Elimina el "doble
     -- borde de color" que aparece con ciertas fuentes / DPIs altos.
@@ -835,9 +695,9 @@ end
 -- saved that flag, the declared default is used (and persisted) instead of
 -- falling back to false / min / 0. Once the user changes it, the saved value
 -- always wins — so pre-configured scripts load exactly as authored.
-local ScriptDefaults = {}
+KHX.ScriptDefaults = {}
 local function applyDefault(flagName, default, fallback)
-    if default ~= nil then ScriptDefaults[flagName] = default end
+    if default ~= nil then KHX.ScriptDefaults[flagName] = default end
     if Config[flagName] == nil then
         local v = default
         if v == nil then v = fallback end
@@ -848,7 +708,7 @@ local function applyDefault(flagName, default, fallback)
 end
 
 -- 🛠 UTILERÍAS EXTRA DE SEGURIDAD Y MENÚ
-local function getSafeColor(flagName, defaultColor)
+function KHX.getSafeColor(flagName, defaultColor)
     local val = Config[flagName]
     if type(val) == "table" then
         local r = tonumber(val[1] or val["1"]) or defaultColor.R
@@ -923,9 +783,52 @@ pcall(function()
 end)
 KillerHubIsPC = KH_IsPC
 
-local KH_WHEEL_STEP = 62 -- px por muesca de rueda
+KHX.KH_WHEEL_STEP = 62 -- px por muesca de rueda
 
-local function _khFindScrollUnderCursor()
+-- ============================================================================
+-- 📜 V5.9.2: AUTO-SCROLL AL ABRIR (dropdowns, color pickers, etc.)
+-- ----------------------------------------------------------------------------
+-- Cuando un widget se expande (lista de opciones, panel de color...) dentro de
+-- un ScrollingFrame de página, el usuario ya no tiene que bajar a mano: el
+-- contenedor se desliza solo lo justo para que el contenido recién abierto
+-- quede visible. `extraHeight` deja reservar el alto que ocupará el panel
+-- ABIERTO (todavía animándose) para no quedarse corto mientras crece.
+-- Barato: un solo pcall + una tween por apertura, cero conexiones nuevas.
+-- ============================================================================
+local function _khScrollIntoView(element, extraHeight)
+    if not element then return end
+    task.defer(function()
+        pcall(function()
+            local scroller = element.Parent
+            while scroller and not scroller:IsA("ScrollingFrame") do
+                scroller = scroller.Parent
+            end
+            if not scroller or not scroller.Parent then return end
+
+            local viewTop = scroller.CanvasPosition.Y
+            local viewH = scroller.AbsoluteSize.Y
+            local elemTop = (element.AbsolutePosition.Y - scroller.AbsolutePosition.Y) + viewTop
+            local elemBottom = elemTop + element.AbsoluteSize.Y + (extraHeight or 0)
+
+            local target = viewTop
+            if elemBottom > viewTop + viewH then
+                target = elemBottom - viewH
+            elseif elemTop < viewTop then
+                target = elemTop
+            else
+                return -- ya está completamente visible, nada que animar
+            end
+
+            local maxScroll = math.max(0, scroller.CanvasSize.Y.Offset - viewH)
+            target = math.max(0, math.min(target, maxScroll))
+            if math.abs(target - viewTop) > 1 then
+                TweenService:Create(scroller, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {CanvasPosition = Vector2.new(scroller.CanvasPosition.X, target)}):Play()
+            end
+        end)
+    end)
+end
+
+function KHX._khFindScrollUnderCursor()
     local ok, list = pcall(function()
         local pos = UserInputService:GetMouseLocation()
         local inset = game:GetService("GuiService"):GetGuiInset()
@@ -951,9 +854,9 @@ if KH_IsPC then
             local conn = UserInputService.InputChanged:Connect(function(input, gp)
                 if gp then return end
                 if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
-                local sf = _khFindScrollUnderCursor()
+                local sf = KHX._khFindScrollUnderCursor()
                 if not sf then return end
-                local delta = -input.Position.Z * KH_WHEEL_STEP
+                local delta = -input.Position.Z * KHX.KH_WHEEL_STEP
                 local maxY = math.max(0, sf.AbsoluteCanvasSize.Y - sf.AbsoluteWindowSize.Y)
                 sf.CanvasPosition = Vector2.new(
                     sf.CanvasPosition.X,
@@ -1056,7 +959,7 @@ local customAssetSupported = nil
 local resolvedImageCache = {}   -- source -> id final ("" si falló)
 local warnedNoCustomAsset = false
 
-local function getAssetFn()
+function KHX.getAssetFn()
     local names = {"getcustomasset", "getsynasset", "getcustomassetasync"}
     for _, n in ipairs(names) do
         -- 🧩 V5.9.1: vía capa de compatibilidad (getfenv puede no existir).
@@ -1069,7 +972,7 @@ local function getAssetFn()
     return nil
 end
 
-local function httpGetBinary(url)
+function KHX.httpGetBinary(url)
     -- request-style executors (devuelven .Body ya en binario)
     -- 🧩 V5.9.1: getfenv() no existe en varios executors de PC y se llamaba
     -- sin protección. Ahora la lista sale de la capa de compatibilidad.
@@ -1090,7 +993,7 @@ local function httpGetBinary(url)
     return nil
 end
 
-local function urlKey(url)
+function KHX.urlKey(url)
     local n = 5381
     for i = 1, #url do
         n = (n * 33 + string.byte(url, i)) % 4294967291
@@ -1101,7 +1004,7 @@ local function urlKey(url)
     return string.format("bg_%010d.%s", n, ext)
 end
 
-local function resolveImageSource(source)
+function KHX.resolveImageSource(source)
     if not source or source == "" then return "" end
     -- Un id plano (solo números) también vale.
     if string.match(source, "^%d+$") then return "rbxassetid://" .. source end
@@ -1109,7 +1012,7 @@ local function resolveImageSource(source)
 
     if resolvedImageCache[source] ~= nil then return resolvedImageCache[source] end
 
-    local assetFn = getAssetFn()
+    local assetFn = KHX.getAssetFn()
     if not (writefile and isfile and assetFn) then
         customAssetSupported = false
         if not warnedNoCustomAsset then
@@ -1126,7 +1029,7 @@ local function resolveImageSource(source)
         return ""
     end
 
-    local filePath = BackgroundCacheFolder .. "/" .. urlKey(source)
+    local filePath = BackgroundCacheFolder .. "/" .. KHX.urlKey(source)
 
     -- ¿Ya estaba cacheada de una sesión anterior?
     local cachedOk, cachedId = pcall(function()
@@ -1141,7 +1044,7 @@ local function resolveImageSource(source)
 
     local finalId = ""
     for attempt = 1, 3 do
-        local bytes = httpGetBinary(source)
+        local bytes = KHX.httpGetBinary(source)
         if bytes and #bytes > 200 then
             ensureFolder(BackgroundCacheFolder)
             local wrote = pcall(writefile, filePath, bytes)
@@ -1174,6 +1077,101 @@ local function resolveImageSource(source)
         end)
     end
     return finalId
+end
+
+-- ============================================================================
+-- 🖼 V5.9.2: PREVIEWS AUTOMÁTICOS EN DROPDOWNS (avatar de jugador / asset id)
+-- ----------------------------------------------------------------------------
+-- Sin tocar la firma de CreateDropdown/CreateMultiDropdown: cada opción se
+-- inspecciona sola. Si el texto de la opción coincide EXACTO con el Name o
+-- DisplayName de un jugador que está ahora mismo en el server, se dibuja su
+-- avatar (headshot) a la izquierda — usando el UserId del Player ya presente
+-- en el server (cero llamadas de red propias, solo Players:GetUserThumbnailAsync
+-- que es la misma API que usa el motor para el Leaderboard/Chat).
+-- Si el texto es un ID de asset puro (rbxassetid://123, o solo dígitos de
+-- 4+ cifras) se muestra ese texture/decal tal cual, igual que en CreateTab.
+-- Todo queda cacheado: un mismo jugador o ID nunca se resuelve dos veces.
+-- Si la opción no matchea nada de esto, no se crea NINGÚN Instance extra —
+-- mismo costo que antes para dropdowns de texto normal.
+-- 🧩 Todo esto vive adentro de un único `do...end`: igual que __KH_ENV más
+-- arriba, es para gastar UN SOLO slot de local en el chunk principal (el
+-- archivo ya iba muy justo del límite de 200 locals de Luau) en vez de cinco.
+-- ============================================================================
+local _khAttachOptionIcon
+do
+    local _khThumbCache = {} -- userId -> content string ("" si falló, nil si aún no se pidió)
+
+    local function getPlayerByLabel(label)
+        if type(label) ~= "string" or label == "" then return nil end
+        local ok, list = pcall(function() return Players:GetPlayers() end)
+        if not ok then return nil end
+        for _, p in ipairs(list) do
+            local ok2, disp = pcall(function() return p.DisplayName end)
+            if p.Name == label or (ok2 and disp == label) then return p end
+            if ok2 and disp and disp ~= p.Name and (disp .. " (@" .. p.Name .. ")") == label then return p end
+        end
+        return nil
+    end
+
+    local function isAssetIdLike(v)
+        if type(v) ~= "string" then return false end
+        if v:match("^rbxassetid://%d+$") or v:match("^rbxthumb://") or v:match("^rbxasset://") then return true end
+        if v:match("^%d%d%d%d+$") then return true end -- 4+ dígitos = casi seguro un asset id, no un nombre
+        return false
+    end
+
+    -- Devuelve el contenido de imagen si ya está listo (sin bloquear jamás el
+    -- hilo principal). Si toca pedirlo (avatar nuevo) lo lanza en background y
+    -- avisa por `onReady` cuando llegue — la fila ya fue dibujada, solo se le
+    -- pone la imagen después, sin parpadeos ni frames perdidos.
+    local function resolveOptionIcon(name, onReady)
+        local player = getPlayerByLabel(name)
+        if player then
+            local cached = _khThumbCache[player.UserId]
+            if cached then return cached end
+            if cached == nil then
+                _khThumbCache[player.UserId] = false -- marca "pedido en curso" (evita duplicar requests)
+                task.spawn(function()
+                    local ok, content = pcall(function()
+                        return Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+                    end)
+                    if ok and content and content ~= "" then
+                        _khThumbCache[player.UserId] = content
+                        if onReady then pcall(onReady, content, true) end
+                    end
+                end)
+            end
+            return nil, true -- "true" = es un jugador (avatar redondo), aunque aún no haya imagen
+        end
+        if isAssetIdLike(name) then
+            return resolveIcon(name), false
+        end
+        return nil, false
+    end
+
+    -- Construye (si aplica) el ImageLabel de preview dentro de una fila de
+    -- opción ya creada, y devuelve true si se reservó espacio para el ícono
+    -- (para que el texto se acomode al lado). No hace nada si no matchea nada.
+    _khAttachOptionIcon = function(OptBtn, name)
+        local iconId, isPlayer = resolveOptionIcon(name, function(content)
+            if OptBtn and OptBtn.Parent then
+                local img = OptBtn:FindFirstChild("KH_Icon")
+                if img then img.Image = content end
+            end
+        end)
+        if not iconId and not isPlayer then return false end
+
+        local img = create("ImageLabel", {
+            Name = "KH_Icon", Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 5, 0.5, -12),
+            BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = isPlayer and 0.35 or 1,
+            Image = iconId or "", ScaleType = Enum.ScaleType.Crop, ZIndex = 2
+        }, OptBtn)
+        create("UICorner", {CornerRadius = isPlayer and UDim.new(1, 0) or UDim.new(0, 6)}, img)
+        if isPlayer then
+            create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER, Transparency = 0.3}, img)
+        end
+        return true
+    end
 end
 
 local MainFrame = create("Frame", {Name = "MainFrame", BackgroundColor3 = CurrentTheme.BG_MAIN, BorderSizePixel = 0, ClipsDescendants = true, Active = true, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, Config.MainFrameX or 0, 0.5, Config.MainFrameY or 0)}, ScreenGui)
@@ -1298,7 +1296,7 @@ local function _paintInnerStroke(stroke)
 end
 
 _registerInnerStroke = function(stroke, properties)
-    if #InnerBorderGradients >= INNER_BORDER_LIMIT then return end
+    if #InnerBorderGradients >= KHX.INNER_BORDER_LIMIT then return end
     if stroke:GetAttribute("ThemeStroke") ~= "BORDER" then return end
     if stroke:FindFirstChildOfClass("UIGradient") then return end
     stroke:SetAttribute("BaseThickness", properties.Thickness or stroke.Thickness or 1)
@@ -1378,7 +1376,7 @@ local function updateBackgroundImage()
     end
 
     task.spawn(function()
-        local resolved = resolveImageSource(rawSource)
+        local resolved = KHX.resolveImageSource(rawSource)
         if myToken ~= backgroundResolveToken then return end -- quedó obsoleto
         if resolved == "" then
             MainBackgroundImage.Visible = false
@@ -1427,7 +1425,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 16)}, Topbar)
 local Title = create("TextLabel", {Size = UDim2.new(0, 250, 1, 0), Position = UDim2.new(0, 18, 0, 0), BackgroundTransparency = 1, Text = "Killer Hub | By Paolo", TextColor3 = CurrentTheme.TEXT_WHITE, TextXAlignment = Enum.TextXAlignment.Left, Font = Enum.Font.GothamBold, TextSize = 14}, Topbar)
 local DecorLine = create("Frame", {Size = UDim2.new(0, 80, 0, 3), Position = UDim2.new(0, 18, 1, -3), BackgroundColor3 = CurrentTheme.ACCENT, BorderSizePixel = 0}, Topbar)
 create("UICorner", {CornerRadius = UDim.new(1, 0)}, DecorLine)
-local DecorGradient = create("UIGradient", {
+KHX.DecorGradient = create("UIGradient", {
     Color = ColorSequence.new({
         ColorSequenceKeypoint.new(0, _blazeColor(CurrentTheme.ACCENT)),
         ColorSequenceKeypoint.new(0.35, CurrentTheme.ACCENT),
@@ -1442,7 +1440,7 @@ local PerformanceLabel = create("TextLabel", {Size = UDim2.new(0, 160, 1, 0), Po
 
 local fpsTimer = 0
 local frameCounter = 0
-local perfConn = RunService.Heartbeat:Connect(function(dt)
+KHX.perfConn = RunService.Heartbeat:Connect(function(dt)
     fpsTimer = fpsTimer + dt
     frameCounter = frameCounter + 1
     if fpsTimer >= 1 then
@@ -1467,7 +1465,7 @@ local perfConn = RunService.Heartbeat:Connect(function(dt)
         PerformanceLabel.Text = string.format("FPS: %d | PING: %dms", currentFps, ping)
     end
 end)
-table.insert(Connections, perfConn)
+table.insert(Connections, KHX.perfConn)
 
 -- 🛡️ ARRASTRE SIN ERRORES MULTI-TOUCH EN MÓVILES
 local function makeDraggable(clickObject, dragObject)
@@ -1540,11 +1538,11 @@ end
 makeDraggable(Topbar, MainFrame)
 
 local Sidebar = create("Frame", {Name = "Sidebar", Size = UDim2.new(0, 125, 1, -45), Position = UDim2.new(0, 0, 0, 45), BackgroundColor3 = CurrentTheme.BG_SIDEBAR, BorderSizePixel = 0, Active = true}, MainFrame)
-local SidebarLine = create("Frame", {Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0), BackgroundColor3 = Color3.fromRGB(30, 30, 35), BorderSizePixel = 0}, Sidebar)
+KHX.SidebarLine = create("Frame", {Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0), BackgroundColor3 = Color3.fromRGB(30, 30, 35), BorderSizePixel = 0}, Sidebar)
 
 local SearchBoxContainer = create("Frame", {Size = UDim2.new(1, -12, 0, 26), Position = UDim2.new(0, 6, 0, 8), BackgroundColor3 = CurrentTheme.BG_SECONDARY}, Sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, SearchBoxContainer)
-local SearchStroke = create("UIStroke", {Thickness = 1, Color = Color3.fromRGB(35, 35, 40)}, SearchBoxContainer)
+KHX.SearchStroke = create("UIStroke", {Thickness = 1, Color = Color3.fromRGB(35, 35, 40)}, SearchBoxContainer)
 
 local SearchInput = create("TextBox", {Size = UDim2.new(1, -10, 1, 0), Position = UDim2.new(0, 5, 0, 0), BackgroundTransparency = 1, PlaceholderText = "Search...", PlaceholderColor3 = CurrentTheme.TEXT_MUTED, Text = "", TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 11, ClearTextOnFocus = false}, SearchBoxContainer)
 
@@ -1555,12 +1553,12 @@ local SidebarTabsContainer = create("ScrollingFrame", {Size = UDim2.new(1, 0, 1,
 local tabsLayout = create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4)}, SidebarTabsContainer)
 create("UIPadding", {PaddingTop = UDim.new(0, 4), PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6)}, SidebarTabsContainer)
 
-local tabsSizeConn = tabsLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+KHX.tabsSizeConn = tabsLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
     SidebarTabsContainer.CanvasSize = UDim2.new(0, 0, 0, tabsLayout.AbsoluteContentSize.Y + 10)
 end)
-table.insert(Connections, tabsSizeConn)
+table.insert(Connections, KHX.tabsSizeConn)
 
-local SettingsContainer = create("Frame", {Size = UDim2.new(1, -12, 0, 36), Position = UDim2.new(0, 6, 1, -42), BackgroundTransparency = 1}, Sidebar)
+KHX.SettingsContainer = create("Frame", {Size = UDim2.new(1, -12, 0, 36), Position = UDim2.new(0, 6, 1, -42), BackgroundTransparency = 1}, Sidebar)
 local ContentContainer = create("Frame", {Name = "ContentContainer", Size = UDim2.new(1, -123, 1, -43), Position = UDim2.new(0, 123, 0, 43), BackgroundTransparency = 1, Active = true}, MainFrame)
 
 local OpenCloseBtn = create("TextButton", {Name = "KillerHubToggle", Size = UDim2.new(0, 46, 0, 46), Position = UDim2.new(0, Config.BtnX or 15, 0, Config.BtnY or 100), BackgroundColor3 = CurrentTheme.BG_MAIN, Text = "", Active = true}, ScreenGui)
@@ -1623,7 +1621,7 @@ local function _ensureBlur()
 end
 
 -- Snapshots de opacidad "en reposo" de cada capa del menu, calculadas al abrir
-local function _computeLayerOpacities()
+function KHX._computeLayerOpacities()
     local o = Config.UiOpacity or 0.75
     return {
         main    = 1 - o,
@@ -1667,7 +1665,7 @@ end
 -- así que aunque haya 20 shortcuts en pantalla el costo sigue siendo trivial.
 -- Se apaga por completo (early return, cero trabajo) con Config.MenuAnimEnabled.
 -- ============================================================================
-local BORDER_ANIM_SPEED = 185 -- valor base; Config.AnimSpeed manda (pestaña Modify)
+KHX.BORDER_ANIM_SPEED = 185 -- valor base; Config.AnimSpeed manda (pestaña Modify)
 local _borderAngle = 0
 local _innerAccum = 0
 -- ⚡ V5.5.0 — CULLING DE BORDES INTERNOS
@@ -1700,7 +1698,7 @@ local _innerCull = {
 local ShortcutBorderAnims = {}  -- id -> UIGradient del borde del shortcut
 local ShortcutLabelPulses = {}  -- id -> {label = TextLabel, base = Color3, pulse = Color3}
 local ShortcutLabelWaves = {}   -- id -> UIGradient del texto (ola hacia la derecha)
-local WAVE_SPEED = 0.85         -- valor base; Config.WaveSpeed manda
+KHX.WAVE_SPEED = 0.85         -- valor base; Config.WaveSpeed manda
 local _waveOffset = 0
 
 local function _borderAnimStep(dt)
@@ -1715,7 +1713,7 @@ local function _borderAnimStep(dt)
     local winLive = MainFrame.Visible and menuFocused
     local floatLive = OpenCloseBtn.Visible and (Config.FloatBorder ~= false and not Config.UiLite)
     if not (winLive or floatLive or scLive) then return end
-    _borderAngle = (_borderAngle + dt * (Config.AnimSpeed or BORDER_ANIM_SPEED)) % 360
+    _borderAngle = (_borderAngle + dt * (Config.AnimSpeed or KHX.BORDER_ANIM_SPEED)) % 360
     local menuLive = winLive
 
     if menuLive and (Config.WindowBorder ~= false and not Config.UiLite) then
@@ -1780,7 +1778,7 @@ local function _borderAnimStep(dt)
     -- asignación de Offset por etiqueta encendida). Va de -1 a 1 en X, así la
     -- luz entra por la izquierda y sale por la derecha, en loop continuo.
     if next(ShortcutLabelWaves) ~= nil then
-        _waveOffset = (_waveOffset + dt * (Config.WaveSpeed or WAVE_SPEED)) % 1
+        _waveOffset = (_waveOffset + dt * (Config.WaveSpeed or KHX.WAVE_SPEED)) % 1
         local off = Vector2.new(_waveOffset * 2 - 1, 0)
         for key, g in pairs(ShortcutLabelWaves) do
             if g.Parent then g.Offset = off else ShortcutLabelWaves[key] = nil end
@@ -1796,7 +1794,7 @@ local function setMenuVisibility(visible)
     menuFocused = visible
     BtnIcon.ImageColor3 = visible and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
 
-    local target = _computeLayerOpacities()
+    local target = KHX._computeLayerOpacities()
     local anim = _animEnabled()
 
     if visible then
@@ -2039,7 +2037,7 @@ local NotifContainer = create("Frame", {
     -- del modal de shortcuts (ZIndex 50+) ni del backdrop del color picker.
     ZIndex = 900
 }, ScreenGui)
-local NotifLayout = create("UIListLayout", {
+KHX.NotifLayout = create("UIListLayout", {
     SortOrder = Enum.SortOrder.LayoutOrder,
     Padding = UDim.new(0, 6),
     VerticalAlignment = Enum.VerticalAlignment.Bottom
@@ -2048,7 +2046,7 @@ local NotifLayout = create("UIListLayout", {
 -- 🛡️ TOPE DE NOTIFICACIONES APILADAS: si algo (o alguien) llama a Notify() en ráfaga,
 -- esto evita que se acumulen decenas de frames en pantalla comiéndose memoria/GPU;
 -- simplemente cierra la más vieja antes de abrir una nueva por encima del límite.
-local MAX_ACTIVE_NOTIFS = 5
+KHX.MAX_ACTIVE_NOTIFS = 5
 local ActiveNotifs = {}
 
 -- Interruptor global de notificaciones (Settings > "Turn off notifications").
@@ -2075,7 +2073,7 @@ function KillerHub:Notify(title, text, duration, customColor)
     duration = duration or 4
     local accentColor = customColor or CurrentTheme.ACCENT
 
-    if #ActiveNotifs >= MAX_ACTIVE_NOTIFS then
+    if #ActiveNotifs >= KHX.MAX_ACTIVE_NOTIFS then
         local oldest = table.remove(ActiveNotifs, 1)
         -- Antes solo se destruia el frame y su callback de tema seguia vivo en
         -- TargetThemeElements: fuga de memoria que hacia lento cada cambio de tema.
@@ -2251,19 +2249,6 @@ function KillerHub:RegisterIcon(name, id)
 end
 function KillerHub:GetIcon(name) return resolveIcon(name) end
 
--- 🖼️ V5.10 · API pública de miniaturas en dropdowns.
--- KillerHub:SetOptionPreviews(false) apaga las fotos de perfil / imágenes.
-function KillerHub:SetOptionPreviews(enabled)
-    enabled = enabled and true or false
-    _G.__KH_ENV.previewsEnabled = enabled
-    _G.__KH_ENV.clearPreviewCache()
-    for _, el in pairs(KillerHub.Elements) do
-        if type(el) == "table" and type(el.RefreshPreviews) == "function" then
-            pcall(el.RefreshPreviews)
-        end
-    end
-end
-
 
 function KillerHub:SetFont(fontName)
     Config.SelectedFont = fontName
@@ -2420,10 +2405,10 @@ function KillerHub:SetTheme(themeName)
     end
     updateBackgroundImage()
     Sidebar.BackgroundColor3 = CurrentTheme.BG_SIDEBAR
-    SidebarLine.BackgroundColor3 = CurrentTheme.BORDER
+    KHX.SidebarLine.BackgroundColor3 = CurrentTheme.BORDER
     Title.TextColor3 = CurrentTheme.TEXT_WHITE
     DecorLine.BackgroundColor3 = CurrentTheme.ACCENT
-    DecorGradient.Color = ColorSequence.new({
+    KHX.DecorGradient.Color = ColorSequence.new({
         ColorSequenceKeypoint.new(0, _blazeColor(CurrentTheme.ACCENT)),
         ColorSequenceKeypoint.new(0.35, CurrentTheme.ACCENT),
         ColorSequenceKeypoint.new(1, CurrentTheme.ACCENT)
@@ -3658,185 +3643,123 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
     end
     updateGlobalFlags(flagName, Config[flagName])
     
-    -- 📐 V5.10: filas más altas (y más altas todavía cuando llevan miniatura)
-    -- y lista más larga, para que las imágenes/perfiles nunca se salgan.
-    local OPT_H, OPT_H_IMG, MAX_LIST_H = 30, 38, 190
-
     local DDFrame = create("Frame", {Name = flagName, Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = CurrentTheme.BG_SECONDARY, BackgroundTransparency = 0.4, ClipsDescendants = true}, self.Frame)
     DDFrame:SetAttribute("ThemeRole", "BG_SECONDARY") DDFrame:SetAttribute("CustomColorLabel", true)
     create("UICorner", {CornerRadius = UDim.new(0, 10)}, DDFrame)
     local Stroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, DDFrame)
     local Trigger = create("TextButton", {Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, Text = ""}, DDFrame)
-
+    
     local Label = create("TextLabel", {Size = UDim2.new(0.5, -12, 1, 0), Position = UDim2.new(0, 12, 0, 0), BackgroundTransparency = 1, Text = text, TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left}, Trigger)
-    -- Miniatura de la opción seleccionada, en la barra cerrada.
-    local SelPreview = create("ImageLabel", {Name = "SelPreview", Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(1, -48, 0.5, -12), BackgroundColor3 = Color3.fromRGB(18, 18, 23), BackgroundTransparency = 0.15, Image = "", ScaleType = Enum.ScaleType.Fit, Visible = false}, Trigger)
-    create("UICorner", {CornerRadius = UDim.new(0, 7)}, SelPreview)
     local SelLabel = create("TextLabel", {Size = UDim2.new(0.5, -38, 1, 0), Position = UDim2.new(1, -38, 0, 0), AnchorPoint = Vector2.new(1, 0), BackgroundTransparency = 1, Text = Flags[flagName].CurrentValue, TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd}, Trigger)
     SelLabel:SetAttribute("ThemeRole", "TEXT_ACCENT")
     local Arrow = create("TextLabel", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -22, 0.5, -10), BackgroundTransparency = 1, Text = "▼", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 11}, Trigger)
-
-    local function updateSelPreview(name)
-        local img = _G.__KH_ENV.preview(name)
-        if img then
-            if SelPreview.Image ~= img then SelPreview.Image = img end
-            SelPreview.Visible = true
-            SelLabel.Position = UDim2.new(1, -76, 0, 0)
-            SelLabel.Size = UDim2.new(0.5, -76, 1, 0)
-        else
-            SelPreview.Visible = false
-            SelPreview.Image = ""
-            SelLabel.Position = UDim2.new(1, -38, 0, 0)
-            SelLabel.Size = UDim2.new(0.5, -38, 1, 0)
-        end
-    end
-    updateSelPreview(Flags[flagName].CurrentValue)
-
+    
     local hasSearch = #options > 6
     local searchHeight = hasSearch and 30 or 0
     local SearchBox
-
+    
     if hasSearch then
         SearchBox = create("TextBox", {Size = UDim2.new(1, -16, 0, 24), Position = UDim2.new(0, 8, 0, 36), BackgroundColor3 = Color3.fromRGB(22, 22, 27), Text = "", PlaceholderText = "Filter options...", PlaceholderColor3 = CurrentTheme.TEXT_MUTED, TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 11, ClearTextOnFocus = false, Visible = false}, DDFrame)
         create("UICorner", {CornerRadius = UDim.new(0, 7)}, SearchBox)
         create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, SearchBox)
     end
-
-    local OptsScroll = create("ScrollingFrame", {Size = UDim2.new(1, -16, 0, 0), Position = UDim2.new(0, 8, 0, 36 + searchHeight), BackgroundTransparency = 1, ScrollBarThickness = 3}, DDFrame)
+    
+    local OptsScroll = create("ScrollingFrame", {Size = UDim2.new(1, -16, 0, 0), Position = UDim2.new(0, 8, 0, 36 + searchHeight), BackgroundTransparency = 1, ScrollBarThickness = 2}, DDFrame)
     local layout = create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4)}, OptsScroll)
-    -- 🩹 Respiración para que el UIStroke de la opción seleccionada no se corte
-    -- contra el ClipsDescendants (arriba, abajo, izquierda y derecha).
+    -- 🩹 Fix premium: da respiración extra a la izq/der para que el UIStroke del
+    -- item seleccionado (que se dibuja centrado sobre el borde) nunca choque con
+    -- el ClipsDescendants del DDFrame y se vea "cortado" del lado izquierdo.
+    -- 🩹 V5.3.4: también arriba/abajo, si no el UIStroke de la PRIMERA y la
+    -- ÚLTIMA opción se recorta contra el borde del ScrollingFrame.
     create("UIPadding", {PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 5), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3)}, OptsScroll)
     local LIST_PAD_V = 6 -- 3 arriba + 3 abajo
+    -- 📐 V5.9.2: filas un poco más grandes (antes 27px) para que el avatar/ícono
+    -- de preview quepa cómodo sin apretarse contra el texto, y lista abierta más
+    -- alta (antes 126px) para que se lean más opciones sin tener que hacer scroll
+    -- dos veces (una del dropdown, otra de la página).
+    local ROW_H = 32
+    local MAX_OPEN_H = 168
 
     local open = false
-    local optButtons = {}
-
-    local function contentH() return layout.AbsoluteContentSize.Y + LIST_PAD_V end
-
-    local function applySize(instant)
-        local targetH = open and math.min(contentH(), MAX_LIST_H) or 0
-        local frameH = 36 + targetH + (open and (searchHeight + 6) or 0)
-        if instant then
-            DDFrame.Size = UDim2.new(1, 0, 0, frameH)
-            OptsScroll.Size = UDim2.new(1, -16, 0, targetH)
-        else
-            TweenService:Create(DDFrame, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, frameH)}):Play()
-            TweenService:Create(OptsScroll, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
-        end
-        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, contentH())
-    end
-
-    -- El tamaño real de la lista se conoce un frame después de crearla: en vez
-    -- de recalcular a mano en cada punto, escuchamos el layout UNA vez.
-    connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
-        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, contentH())
-        if open then applySize(true) end
-    end)
-
+    
     local function setDropdownOpen(shouldOpen)
         open = shouldOpen
-        if SearchBox then
-            SearchBox.Visible = open
-            if not open then SearchBox.Text = "" end
-        end
-        TweenService:Create(Arrow, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
-        applySize(false)
-        -- 📜 Al abrir, deslizamos solos hasta que se vea la lista completa.
-        if open then _G.__KH_ENV.scrollIntoView(DDFrame) end
+        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, MAX_OPEN_H) or 0
+        if SearchBox then SearchBox.Visible = open if not open then SearchBox.Text = "" end end
+        
+        TweenService:Create(DDFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36 + targetH + searchHeight + (open and 6 or 0))}):Play()
+        TweenService:Create(OptsScroll, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
+        TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
+        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
+        -- 📜 Auto-scroll: al abrir, la página se desliza sola para mostrar la
+        -- lista completa (nada que hacer al cerrar, no hace falta deshacerlo).
+        if open then _khScrollIntoView(DDFrame, targetH + searchHeight) end
     end
 
     connect(Trigger.MouseButton1Click, function()
         playUISound()
         setDropdownOpen(not open)
     end)
-
-    -- 🔁 Repintar la selección SIN reconstruir los botones (antes cada click
-    -- destruía y recreaba la lista entera: eso era el tirón de FPS).
-    local function paintSelection()
-        local current = Flags[flagName].CurrentValue
-        for name, btn in pairs(optButtons) do
-            if btn.Parent then
-                local sel = (name == current)
-                btn.BackgroundColor3 = sel and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27)
-                local txt = btn:FindFirstChild("OptText")
-                if txt then txt.TextColor3 = sel and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE end
-                local st = btn:FindFirstChildOfClass("UIStroke")
-                if st then
-                    st.Color = CurrentTheme.GLOW or CurrentTheme.ACCENT
-                    st.Transparency = sel and 0.45 or 1
-                end
-            end
-        end
-    end
-
+    
     local function selectOption(name)
-        updateGlobalFlags(flagName, name) Config[flagName] = name saveConfig()
-        SelLabel.Text = name
-        updateSelPreview(name)
-        open = false
+        updateGlobalFlags(flagName, name) Config[flagName] = name saveConfig() SelLabel.Text = name open = false
         if SearchBox then SearchBox.Text = "" SearchBox.Visible = false end
-        TweenService:Create(DDFrame, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36)}):Play()
-        TweenService:Create(OptsScroll, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, 0)}):Play()
-        TweenService:Create(Arrow, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = 0}):Play()
-        paintSelection()
+        TweenService:Create(DDFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36)}):Play()
+        TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = 0}):Play()
         safeCall("callback", callback, name)
     end
 
     local function makeOptions()
         for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
-        table.clear(optButtons)
-        local current = Flags[flagName].CurrentValue
         for i, name in ipairs(options) do
-            local selected = (name == current)
-            local img = _G.__KH_ENV.preview(name)
-            local OptBtn = create("TextButton", {
-                Size = UDim2.new(1, 0, 0, img and OPT_H_IMG or OPT_H),
-                BackgroundColor3 = selected and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
-                Text = "", AutoButtonColor = false, LayoutOrder = i
-            }, OptsScroll)
-            OptBtn:SetAttribute("OptName", name)
+            local selected = (name == Flags[flagName].CurrentValue)
+            local OptBtn = create("TextButton", {Size = UDim2.new(1, 0, 0, ROW_H), BackgroundColor3 = selected and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27), Text = "", LayoutOrder = i}, OptsScroll)
             create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
-            create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = selected and 0.45 or 1}, OptBtn)
-
-            local pad = 10
-            if img then
-                local Thumb = create("ImageLabel", {
-                    Name = "OptThumb", Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(0, 5, 0.5, -14),
-                    BackgroundColor3 = Color3.fromRGB(16, 16, 20), BackgroundTransparency = 0.1,
-                    Image = img, ScaleType = Enum.ScaleType.Fit
-                }, OptBtn)
-                create("UICorner", {CornerRadius = UDim.new(0, 7)}, Thumb)
-                pad = 40
+            if selected then
+                create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 0.45}, OptBtn)
             end
+
+            -- 🖼 Preview automático (avatar de jugador / asset id) — no rompe
+            -- dropdowns de texto normal, esos no reservan ningún espacio extra.
+            local hasIcon = _khAttachOptionIcon(OptBtn, name)
             create("TextLabel", {
-                Name = "OptText", Size = UDim2.new(1, -(pad + 10), 1, 0), Position = UDim2.new(0, pad, 0, 0),
-                BackgroundTransparency = 1, Text = name,
-                TextColor3 = selected and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE,
-                Font = Enum.Font.GothamMedium, TextSize = 11,
-                TextXAlignment = img and Enum.TextXAlignment.Left or Enum.TextXAlignment.Center,
-                TextTruncate = Enum.TextTruncate.AtEnd
+                Name = "KH_Text", Size = hasIcon and UDim2.new(1, -38, 1, 0) or UDim2.new(1, -12, 1, 0),
+                Position = hasIcon and UDim2.new(0, 34, 0, 0) or UDim2.new(0, 8, 0, 0),
+                BackgroundTransparency = 1, Text = name, TextColor3 = selected and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE,
+                Font = Enum.Font.GothamMedium, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd
             }, OptBtn)
 
-            optButtons[name] = OptBtn
             connect(OptBtn.MouseButton1Click, function()
                 playUISound()
                 selectOption(name)
+                makeOptions()
             end)
             addInteractiveFeedback(OptBtn)
         end
-        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, contentH())
+        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
     end
 
     if SearchBox then
         connect(SearchBox:GetPropertyChangedSignal("Text"), function()
             local filter = string.lower(SearchBox.Text)
-            for name, btn in pairs(optButtons) do
-                if btn.Parent then
-                    btn.Visible = (filter == "") or (string.find(string.lower(name), filter, 1, true) ~= nil)
+            for _, child in ipairs(OptsScroll:GetChildren()) do
+                if child:IsA("TextButton") then
+                    -- 🩹 V5.9.2: el texto de cada opción vive en un TextLabel hijo
+                    -- ("KH_Text", ver _khAttachOptionIcon) desde que agregamos los
+                    -- previews de avatar/asset id, así que ya no se puede leer
+                    -- child.Text directo (ahora siempre está vacío).
+                    local lbl = child:FindFirstChild("KH_Text")
+                    local optText = lbl and lbl.Text or child.Text
+                    child.Visible = (filter == "") or (string.find(string.lower(optText), filter) and true or false)
                 end
             end
-            task.defer(function() if open then applySize(true) end end)
+            task.defer(function()
+                if not open then return end
+                local targetH = math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, MAX_OPEN_H)
+                DDFrame.Size = UDim2.new(1, 0, 0, 36 + targetH + searchHeight + 6)
+                OptsScroll.Size = UDim2.new(1, -16, 0, targetH)
+                OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
+            end)
         end)
     end
 
@@ -3844,7 +3767,7 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
         Label.TextColor3 = CurrentTheme.TEXT_WHITE
         Arrow.TextColor3 = CurrentTheme.TEXT_MUTED
         if SearchBox then SearchBox.PlaceholderColor3 = CurrentTheme.TEXT_MUTED SearchBox.TextColor3 = CurrentTheme.TEXT_WHITE end
-        paintSelection()
+        makeOptions()
     end)
 
     makeOptions()
@@ -3852,59 +3775,38 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
 
     addInteractiveFeedback(Trigger)
     self:RegisterElement(DDFrame, Label, self.Frame.Name)
-
+    
     local ddObj = {
         Refresh = function(_, newOptions)
-            -- ⚡ Si la lista es idéntica a la actual no reconstruimos nada.
-            -- (Los dropdowns de jugadores refrescaban 30 botones cada 2s aunque
-            -- no hubiera cambiado nadie: puro trabajo tirado a la basura.)
-            local same = #newOptions == #options
-            if same then
-                for i = 1, #newOptions do
-                    if newOptions[i] ~= options[i] then same = false break end
-                end
-            end
-            if same then return end
-
             options = newOptions
             hasSearch = #options > 6
             searchHeight = hasSearch and 30 or 0
             if SearchBox then SearchBox.Visible = open and hasSearch end
-            OptsScroll.Position = UDim2.new(0, 8, 0, 36 + searchHeight)
+            -- Same stale-option guard on dynamic refreshes
             if not optionExists(Config[flagName]) then
                 local v = fallbackValue()
                 Config[flagName] = v
                 updateGlobalFlags(flagName, v)
                 saveConfig()
                 SelLabel.Text = v
-                updateSelPreview(v)
                 if v ~= "" then safeCall("callback", callback, v) end
-            else
-                updateSelPreview(Flags[flagName].CurrentValue)
             end
             makeOptions()
-            if open then task.defer(function() applySize(true) end) end
         end,
         BindToDynamicList = function(self, queryFunction, refreshInterval)
             refreshInterval = refreshInterval or 2.0
             task.spawn(function()
                 while task.wait(refreshInterval) do
                     if not ScreenGui or not ScreenGui.Parent then break end
-                    if not DDFrame.Parent then break end
-                    -- ⚡ Sin gastar nada mientras el hub está cerrado.
-                    if ScreenGui.Enabled ~= false and DDFrame.Parent and DDFrame.Parent.Visible then
-                        local success, newList = pcall(queryFunction)
-                        if success and type(newList) == "table" then
-                            self:Refresh(newList)
-                        end
+                    local success, newList = pcall(queryFunction)
+                    if success and type(newList) == "table" then
+                        self:Refresh(newList)
                     end
                 end
             end)
-        end,
-        -- Fuerza a repintar miniaturas (por si cambió el servidor)
-        RefreshPreviews = function() _G.__KH_ENV.clearPreviewCache() makeOptions() updateSelPreview(Flags[flagName].CurrentValue) end
+        end
     }
-
+    
     KillerHub.Elements[flagName] = ddObj
     return ddObj
 end
@@ -3923,7 +3825,7 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
             if type(k) == "number" then seed[v] = true else seed[k] = v and true or false end
         end
         Config[flagName] = seed
-        ScriptDefaults[flagName] = seed
+        KHX.ScriptDefaults[flagName] = seed
         saveConfig()
     end
     if Config[flagName] == nil or type(Config[flagName]) ~= "table" then Config[flagName] = {} end
@@ -3950,15 +3852,15 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
     SelLabel:SetAttribute("ThemeRole", "TEXT_ACCENT")
     local Arrow = create("TextLabel", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -22, 0.5, -10), BackgroundTransparency = 1, Text = "▼", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 11}, Trigger)
     
-    -- 📐 V5.10: mismas filas grandes + miniaturas que en CreateDropdown.
-    local OPT_H, OPT_H_IMG, MAX_LIST_H = 30, 38, 190
-
-    local OptsScroll = create("ScrollingFrame", {Size = UDim2.new(1, -16, 0, 0), Position = UDim2.new(0, 8, 0, 36), BackgroundTransparency = 1, ScrollBarThickness = 3}, MFrame)
+    local OptsScroll = create("ScrollingFrame", {Size = UDim2.new(1, -16, 0, 0), Position = UDim2.new(0, 8, 0, 36), BackgroundTransparency = 1, ScrollBarThickness = 2}, MFrame)
     local layout = create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4)}, OptsScroll)
     -- 🩹 Mismo fix que en CreateDropdown: evita que el UIStroke de la opción
-    -- marcada se vea cortado contra el ClipsDescendants.
+    -- marcada se vea cortado del lado izquierdo contra el ClipsDescendants.
     create("UIPadding", {PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 5), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3)}, OptsScroll)
     local LIST_PAD_V = 6
+    -- 📐 V5.9.2: mismo ajuste que en CreateDropdown (ver comentario ahí).
+    local ROW_H = 32
+    local MAX_OPEN_H = 168
 
     local function updateText()
         local selected = {}
@@ -3967,77 +3869,45 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
     end
 
     local open = false
-    local cacheButtons = {}
-
-    local function contentH() return layout.AbsoluteContentSize.Y + LIST_PAD_V end
-
-    local function applySize(instant)
-        local targetH = open and math.min(contentH(), MAX_LIST_H) or 0
-        local frameH = 36 + targetH + (open and 6 or 0)
-        if instant then
-            MFrame.Size = UDim2.new(1, 0, 0, frameH)
-            OptsScroll.Size = UDim2.new(1, -16, 0, targetH)
-        else
-            TweenService:Create(MFrame, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, frameH)}):Play()
-            TweenService:Create(OptsScroll, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
-        end
-        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, contentH())
-    end
-
-    connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
-        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, contentH())
-        if open then applySize(true) end
-    end)
-
     connect(Trigger.MouseButton1Click, function()
         open = not open playUISound()
-        TweenService:Create(Arrow, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
-        applySize(false)
-        if open then _G.__KH_ENV.scrollIntoView(MFrame) end
+        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, MAX_OPEN_H) or 0
+        TweenService:Create(MFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36 + targetH + (open and 6 or 0))}):Play()
+        TweenService:Create(OptsScroll, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
+        TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
+        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
+        -- 📜 Auto-scroll: igual que en CreateDropdown, sin esto habría que bajar
+        -- la página a mano para ver la lista completa recién abierta.
+        if open then _khScrollIntoView(MFrame, targetH) end
     end)
 
+    local cacheButtons = {}
     local function makeList()
         for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
         table.clear(cacheButtons)
-
+        
         for i, name in ipairs(options) do
             local isChosen = Config[flagName][name] or false
-            local img = _G.__KH_ENV.preview(name)
-            local OptBtn = create("TextButton", {
-                Size = UDim2.new(1, 0, 0, img and OPT_H_IMG or OPT_H),
-                BackgroundColor3 = isChosen and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
-                Text = "", AutoButtonColor = false, LayoutOrder = i
-            }, OptsScroll)
-            OptBtn:SetAttribute("OptName", name)
+            local OptBtn = create("TextButton", {Size = UDim2.new(1, 0, 0, ROW_H), BackgroundColor3 = isChosen and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27), Text = "", LayoutOrder = i}, OptsScroll)
             create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
             local OptGlow = create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = isChosen and 0.45 or 1}, OptBtn)
-
-            local pad = 10
-            if img then
-                local Thumb = create("ImageLabel", {
-                    Name = "OptThumb", Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(0, 5, 0.5, -14),
-                    BackgroundColor3 = Color3.fromRGB(16, 16, 20), BackgroundTransparency = 0.1,
-                    Image = img, ScaleType = Enum.ScaleType.Fit
-                }, OptBtn)
-                create("UICorner", {CornerRadius = UDim.new(0, 7)}, Thumb)
-                pad = 40
-            end
-            local OptText = create("TextLabel", {
-                Name = "OptText", Size = UDim2.new(1, -(pad + 10), 1, 0), Position = UDim2.new(0, pad, 0, 0),
-                BackgroundTransparency = 1, Text = name,
-                TextColor3 = isChosen and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE,
-                Font = Enum.Font.GothamMedium, TextSize = 11,
-                TextXAlignment = img and Enum.TextXAlignment.Left or Enum.TextXAlignment.Center,
-                TextTruncate = Enum.TextTruncate.AtEnd
-            }, OptBtn)
             cacheButtons[name] = OptBtn
+
+            -- 🖼 Mismo preview automático que en CreateDropdown.
+            local hasIcon = _khAttachOptionIcon(OptBtn, name)
+            local OptText = create("TextLabel", {
+                Name = "KH_Text", Size = hasIcon and UDim2.new(1, -38, 1, 0) or UDim2.new(1, -12, 1, 0),
+                Position = hasIcon and UDim2.new(0, 34, 0, 0) or UDim2.new(0, 8, 0, 0),
+                BackgroundTransparency = 1, Text = name, TextColor3 = isChosen and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE,
+                Font = Enum.Font.GothamMedium, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd
+            }, OptBtn)
 
             connect(OptBtn.MouseButton1Click, function()
                 local nextState = not Config[flagName][name]
                 Config[flagName][name] = nextState
                 saveConfig() playUISound() updateText()
                 updateGlobalFlags(flagName, Config[flagName])
-
+                
                 TweenService:Create(OptBtn, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {
                     BackgroundColor3 = nextState and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27)
                 }):Play()
@@ -4051,7 +3921,7 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
             end)
             addInteractiveFeedback(OptBtn)
         end
-        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, contentH())
+        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
     end
 
     table.insert(KillerHub.TargetThemeElements, function()
@@ -4069,44 +3939,9 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
             local selected = {}
             for opt, val in pairs(Config[flagName]) do if val then table.insert(selected, opt) end end
             return selected
-        end,
-        -- ⚡ Igual que en CreateDropdown: si la lista no cambió, no se toca nada.
-        Refresh = function(_, newOptions)
-            local same = #newOptions == #options
-            if same then
-                for i = 1, #newOptions do
-                    if newOptions[i] ~= options[i] then same = false break end
-                end
-            end
-            if same then return end
-            options = newOptions
-            local valid = {}
-            for _, o in ipairs(options) do valid[o] = true end
-            local changed = false
-            for k in pairs(Config[flagName]) do
-                if not valid[k] then Config[flagName][k] = nil changed = true end
-            end
-            if changed then saveConfig() updateGlobalFlags(flagName, Config[flagName]) end
-            makeList() updateText()
-            if open then task.defer(function() applySize(true) end) end
-        end,
-        BindToDynamicList = function(self, queryFunction, refreshInterval)
-            refreshInterval = refreshInterval or 2.0
-            task.spawn(function()
-                while task.wait(refreshInterval) do
-                    if not ScreenGui or not ScreenGui.Parent then break end
-                    if not MFrame.Parent then break end
-                    if ScreenGui.Enabled ~= false and MFrame.Parent.Visible then
-                        local ok, newList = pcall(queryFunction)
-                        if ok and type(newList) == "table" then self:Refresh(newList) end
-                    end
-                end
-            end)
-        end,
-        RefreshPreviews = function() _G.__KH_ENV.clearPreviewCache() makeList() end
+        end
     }
     KillerHub.Elements[flagName] = mddObj
-    return mddObj
 end
 
 -- ============================================================================
@@ -4123,7 +3958,7 @@ function TabMethods:CreateToggleColorPicker(flagToggle, flagColor, text, default
     }) then return end
 
     if Config[flagToggle] == nil then Config[flagToggle] = false end
-    local savedColor = getSafeColor(flagColor, defaultColor)
+    local savedColor = KHX.getSafeColor(flagColor, defaultColor)
     Config[flagColor] = {savedColor.R, savedColor.G, savedColor.B}
     updateGlobalFlags(flagToggle, Config[flagToggle])
     updateGlobalFlags(flagColor, savedColor)
@@ -4169,12 +4004,13 @@ function TabMethods:CreateToggleColorPicker(flagToggle, flagColor, text, default
     end)
 
     local open = false
-    local open = false
-    connect(ColorBtn.MouseButton1Click, function()
-        open = not open playUISound()
+    connect(ColorBtn.MouseButton1Click, function() 
+        open = not open playUISound() 
         TweenService:Create(MasterFrame, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, open and OPEN_H or CLOSED_H)}):Play()
-        -- 📜 Se desliza solo para que el panel de color quede completo a la vista.
-        if open then _G.__KH_ENV.scrollIntoView(MasterFrame, 0.18) else saveConfig() end
+        if not open then saveConfig() end -- 💾 Autoguardado explícito al cerrar el menú del color picker
+        -- 📜 Auto-scroll: igual que en los dropdowns, al abrir el panel de color
+        -- la página se desliza sola para mostrarlo completo.
+        if open then _khScrollIntoView(MasterFrame, OPEN_H - CLOSED_H) end
     end)
     
     table.insert(KillerHub.TargetThemeElements, function() stateUpdate() Panel.ApplyTheme() end)
@@ -4208,7 +4044,7 @@ function TabMethods:CreateColorPicker(flagColor, text, defaultColor, callback)
         ["callback"] = {value = callback, types = {"function"}}
     }) then return end
 
-    local savedColor = getSafeColor(flagColor, defaultColor)
+    local savedColor = KHX.getSafeColor(flagColor, defaultColor)
     Config[flagColor] = {savedColor.R, savedColor.G, savedColor.B}
     updateGlobalFlags(flagColor, savedColor)
 
@@ -4230,12 +4066,13 @@ function TabMethods:CreateColorPicker(flagColor, text, defaultColor, callback)
     end)
 
     local open = false
-    local open = false
-    connect(ColorBtn.MouseButton1Click, function()
-        open = not open playUISound()
+    connect(ColorBtn.MouseButton1Click, function() 
+        open = not open playUISound() 
         TweenService:Create(MasterFrame, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, open and OPEN_H or CLOSED_H)}):Play()
-        -- 📜 Se desliza solo para que el panel de color quede completo a la vista.
-        if open then _G.__KH_ENV.scrollIntoView(MasterFrame, 0.18) else saveConfig() end
+        if not open then saveConfig() end -- 💾 Autoguardado explícito al cerrar el menú del color picker
+        -- 📜 Auto-scroll: igual que en los dropdowns, al abrir el panel de color
+        -- la página se desliza sola para mostrarlo completo.
+        if open then _khScrollIntoView(MasterFrame, OPEN_H - CLOSED_H) end
     end)
     
     table.insert(KillerHub.TargetThemeElements, Panel.ApplyTheme)
@@ -4522,7 +4359,7 @@ function KillerHub:CreateTab(name, iconId, opts)
     end)
     table.insert(Connections, sizeChangedConn)
 
-    local btn = create("TextButton", {Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = CurrentTheme.ACCENT, BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, (name == "Settings" and SettingsContainer or parentContainer))
+    local btn = create("TextButton", {Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = CurrentTheme.ACCENT, BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, (name == "Settings" and KHX.SettingsContainer or parentContainer))
     create("UICorner", {CornerRadius = UDim.new(0, 8)}, btn)
     -- Resolvemos el icono: acepta nombre ("Gun"), ID plano ("14939026710") o rbxassetid completo
     local resolvedIcon = resolveIcon(iconId)
@@ -4790,24 +4627,24 @@ local SHORTCUT_ICON_TEXT  = ""     -- se usa solo si SHORTCUT_ICON_IMAGE == ""
 
 -- Colores de "activo" para el activador; en temas cuyo ACCENT es prácticamente
 -- blanco, se usa un color distintivo para que se note el estado ON.
-local ShortcutAccentOverrides = {
+KHX.ShortcutAccentOverrides = {
     ["Obsidian"] = { fill = Color3.fromRGB(110, 48, 195), glyph = Color3.fromRGB(255, 255, 255) },
     ["Classic Dark"] = { fill = Color3.fromRGB(215, 45, 55), glyph = Color3.fromRGB(255, 255, 255) },
 }
-local function getShortcutAccent()
-    local ov = ShortcutAccentOverrides[Config.SelectedTheme]
+function KHX.getShortcutAccent()
+    local ov = KHX.ShortcutAccentOverrides[Config.SelectedTheme]
     if ov then return ov.fill, ov.glyph end
     return CurrentTheme.ACCENT, CurrentTheme.TEXT_WHITE
 end
 
 -- 🖍 Thin themed outline for the floating shortcut buttons.
-local ShortcutBorderOverrides = {
+KHX.ShortcutBorderOverrides = {
     ["Obsidian"] = Color3.fromRGB(150, 80, 255),   -- void purple
     ["Blood"] = Color3.fromRGB(255, 60, 60),       -- red
     ["Classic Dark"] = Color3.fromRGB(225, 55, 60) -- red
 }
 local function getShortcutBorder()
-    return ShortcutBorderOverrides[Config.SelectedTheme] or CurrentTheme.GLOW or CurrentTheme.ACCENT
+    return KHX.ShortcutBorderOverrides[Config.SelectedTheme] or CurrentTheme.GLOW or CurrentTheme.ACCENT
 end
 
 -- Lighten a color towards white (used to keep OFF labels readable).
@@ -4819,13 +4656,13 @@ end
 -- contorno (borde) de los botones flotantes: mismo color del tema, pero un
 -- tono oscuro/apagado en vez del acento brillante — el acento brillante se
 -- reserva para el texto "ON" y el flash de los botones de un solo click.
-local function darkenColor(c, f)
+function KHX.darkenColor(c, f)
     return Color3.new(c.R * (1 - f), c.G * (1 - f), c.B * (1 - f))
 end
 _shortcutBorderColor = getShortcutBorder
 
-local function getShortcutBorderDark()
-    return darkenColor(getShortcutBorder(), 0.55)
+function KHX.getShortcutBorderDark()
+    return KHX.darkenColor(getShortcutBorder(), 0.55)
 end
 
 -- Contenedor global de los botones flotantes; vive en su propio ScreenGui con
@@ -4873,7 +4710,7 @@ end
 
 -- 🧭 Grid automático: reparte shortcuts arriba de la pantalla en filas, evitando
 -- que se amontonen cuando el usuario activa varios sin arrastrarlos.
-local function nextShortcutSlot(cfg)
+function KHX.nextShortcutSlot(cfg)
     local vp = Camera and Camera.ViewportSize or Vector2.new(800, 600)
     local marginTop = 90
     local marginSide = 14
@@ -4895,7 +4732,7 @@ local function nextShortcutSlot(cfg)
     return x, y
 end
 
-local function ensureCfg(id)
+function KHX.ensureCfg(id)
     local c = Config.Shortcuts[id]
     if type(c) ~= "table" then c = defaultCfg() Config.Shortcuts[id] = c end
     for k, v in pairs(defaultCfg()) do if c[k] == nil then c[k] = v end end
@@ -4923,7 +4760,7 @@ end
 -- 📐 Preview del modal: escala la forma para que NUNCA se salga del recuadro
 -- de vista previa (antes la forma "rectangular" con tamaño alto se desbordaba
 -- por los costados). Sólo afecta al ModalPreviewFrame, no al shortcut real.
-local PREVIEW_MAX_W, PREVIEW_MAX_H = 120, 84
+KHX.PREVIEW_MAX_W, KHX.PREVIEW_MAX_H = 120, 84
 local function computePreviewSize(cfg)
     local w, h
     if cfg.shape == "rounded" then
@@ -4931,7 +4768,7 @@ local function computePreviewSize(cfg)
     else
         w, h = cfg.size, cfg.size
     end
-    local scale = math.min(PREVIEW_MAX_W / w, PREVIEW_MAX_H / h, 1)
+    local scale = math.min(KHX.PREVIEW_MAX_W / w, KHX.PREVIEW_MAX_H / h, 1)
     return UDim2.new(0, math.floor(w * scale), 0, math.floor(h * scale))
 end
 
@@ -5067,7 +4904,7 @@ local function flashShortcutButton(sc)
     end)
 end
 
-local function destroyShortcut(id)
+function KHX.destroyShortcut(id)
     local sc = Shortcuts[id]
     if not sc then return end
     if sc.frame then pcall(function() sc.frame:Destroy() end) end
@@ -5085,7 +4922,7 @@ local function createFloating(sc)
     -- cfg.x/cfg.y y userMoved persisten → conserva la posición del usuario.
     local needsAutoPos = ((cfg.x or -1) < 0) or ((cfg.y or -1) < 0)
     if needsAutoPos or ((Config.AutoArrangeShortcuts ~= false) and (not cfg.userMoved)) then
-        local nx, ny = nextShortcutSlot(cfg)
+        local nx, ny = KHX.nextShortcutSlot(cfg)
         cfg.x, cfg.y = nx, ny
     end
     local fontEnum = currentFontEnum()
@@ -5102,7 +4939,7 @@ local function createFloating(sc)
     }, ShortcutLayer)
     applyShape(frame, cfg.shape)
     -- Thin themed outline around every floating shortcut (tono oscuro del
-    -- tema, no el acento brillante — ver getShortcutBorderDark()).
+    -- tema, no el acento brillante — ver KHX.getShortcutBorderDark()).
     -- 🩹 V5.7.1: nace ya con el look correcto según si la animación está activa
     -- (antes nacía blanco/neutro con el degradado congelado cuando "UI
     -- optimization" estaba encendido, y solo se corregía al reabrir el juego).
@@ -5363,7 +5200,7 @@ function KillerHub._RefreshShortcuts()
     end
 end
 
-local function buildModal()
+function KHX.buildModal()
     if ConfigModal then return end
     ConfigModal = create("Frame", {
         Name = "ShortcutConfigModal",
@@ -5737,7 +5574,7 @@ function ModalRefresh()
 end
 
 local function openModal(sc)
-    buildModal()
+    KHX.buildModal()
     currentModalSc = sc
     local backdropName = ConfigModal:GetAttribute("BackdropName")
     local backdrop = backdropName and ScreenGui:FindFirstChild(backdropName)
@@ -5751,7 +5588,7 @@ end
 -- --------------------------------------------------------------------
 function KillerHub._AttachShortcut(hostFrame, data)
     if not hostFrame or not data or not data.id then return end
-    local cfg = ensureCfg(data.id)
+    local cfg = KHX.ensureCfg(data.id)
     local sc = { data = data, cfg = cfg }
     Shortcuts[data.id] = sc
 
@@ -5819,7 +5656,7 @@ function KillerHub._AttachShortcut(hostFrame, data)
     local function refreshActivator()
         local animOn = (Config.ShortcutBorder ~= false and not Config.UiLite)
         if cfg.active then
-            local fill, glyph = getShortcutAccent()
+            local fill, glyph = KHX.getShortcutAccent()
             act.BackgroundColor3 = fill
             act.TextColor3 = glyph
             -- Borde neutro tambien en estado activo: el fondo ya
@@ -6053,11 +5890,6 @@ SP.General:CreateToggle("UiLite", "UI optimization", function(v)
     if KillerHub.ApplyUiOptimization then KillerHub:ApplyUiOptimization() end
 end, false)
 SP.General:CreateHint("Low-end mode: no animated borders, no text wave, no blur.")
-
-SP.General:CreateToggle("DropdownPreviews", "Dropdown previews", function(v)
-    KillerHub:SetOptionPreviews(v)
-end, true)
-SP.General:CreateHint("Shows Roblox avatars and image IDs inside dropdown lists.")
 
 SP.fonts = {
     "Gotham", "GothamMedium", "GothamBold", "GothamBlack", "GothamSemibold",
@@ -6838,11 +6670,11 @@ do
 local KH_OWNER_USERID  = 312419911   -- ← TU USERID DE ROBLOX
 local KH_ANALYTICS_URL = "https://project--e9d15026-4081-4e74-a34f-79f6f3fea1cd-dev.lovable.app/api/public/kh"
 local KH_OWNER_KEY     = "killerhub-panel-2026"
-local KH_PING_INTERVAL = 20
-local KH_VERSION       = "5.9.0"
+KHX.KH_PING_INTERVAL = 20
+KHX.KH_VERSION       = "5.9.0"
 
 local KH_ICON_USER  = "rbxassetid://81489458260315"
-local KH_ICON_CLOSE = "rbxassetid://82994774214203"
+KHX.KH_ICON_CLOSE = "rbxassetid://82994774214203"
 
     if KH_ANALYTICS_URL ~= "" then
         -- 🧩 V5.9.1: la petición sale de la capa de compatibilidad (cubre
@@ -6892,7 +6724,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                     placeId     = tostring(game.PlaceId),
                     jobId       = tostring(game.JobId or ""),
                     gameName    = cachedGameName,
-                    version     = KH_VERSION,
+                    version     = KHX.KH_VERSION,
                 })
             end)
             if ok then payload = encoded end
@@ -6934,7 +6766,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
             while not _G.__KillerHub_Unloaded__ do
                 sendPing()
                 local slept = 0
-                while slept < KH_PING_INTERVAL and not _G.__KillerHub_Unloaded__ do
+                while slept < KHX.KH_PING_INTERVAL and not _G.__KillerHub_Unloaded__ do
                     slept = slept + task.wait(1)
                 end
             end
@@ -7101,7 +6933,7 @@ local KH_ICON_CLOSE = "rbxassetid://82994774214203"
                 close.Position = UDim2.new(1, -16, 0.5, 0)
                 close.AnchorPoint = Vector2.new(1, 0.5)
                 close.BackgroundTransparency = 1
-                close.Image = KH_ICON_CLOSE
+                close.Image = KHX.KH_ICON_CLOSE
                 close.ZIndex = 503
                 close.Parent = headBar
                 paint(close, "ImageColor3", "TEXT_MUTED", Color3.fromRGB(150, 150, 160))
