@@ -1813,6 +1813,30 @@ local function addInteractiveFeedback(inst)
     end)
 end
 
+-- 🧭 Auto-scroll: cuando un Dropdown o el Color Picker se despliegan dentro de
+-- una pestaña, su contenido puede quedar parcialmente tapado por el borde
+-- inferior del ScrollingFrame de la pestaña. En vez de obligar a bajar
+-- manualmente, se desplaza solo lo justo para dejar visible el elemento
+-- abierto (con un pequeño margen), sin pasarse del final del scroll.
+-- Barato: un solo task.defer + un Tween por apertura, nada por Heartbeat.
+local function scrollItemIntoView(scrollFrame, itemFrame, extraHeight)
+    if not scrollFrame or not scrollFrame:IsA("ScrollingFrame") then return end
+    task.defer(function()
+        if not itemFrame or not itemFrame.Parent or not scrollFrame.Parent then return end
+        local viewTop = scrollFrame.AbsolutePosition.Y
+        local viewBottom = viewTop + scrollFrame.AbsoluteSize.Y
+        local itemBottom = itemFrame.AbsolutePosition.Y + itemFrame.AbsoluteSize.Y + (extraHeight or 0)
+        if itemBottom > viewBottom then
+            local delta = (itemBottom - viewBottom) + 10
+            local maxScroll = math.max(0, scrollFrame.CanvasSize.Y.Offset - scrollFrame.AbsoluteSize.Y)
+            local newY = math.clamp(scrollFrame.CanvasPosition.Y + delta, 0, maxScroll)
+            TweenService:Create(scrollFrame, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                CanvasPosition = Vector2.new(scrollFrame.CanvasPosition.X, newY)
+            }):Play()
+        end
+    end)
+end
+
 -- ============================================================================
 -- 📦 API CORE Y MOTOR REACTIVO (ATRIBUTOS DE ARQUITECTURA)
 -- ============================================================================
@@ -3486,18 +3510,31 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
         ["default"] = {value = default, types = {"string", "nil"}}
     }) then return end
 
+    -- 🖼️ V6.0: cada entrada de "options" puede ser un string normal ("Legendary")
+    -- o una tabla {Text = "Legendary", Icon = "rbxassetid://..."} para dropdowns
+    -- con imagen (armas, skins, texturas, jugadores...). optText/optIcon extraen
+    -- lo que corresponda sin romper ningún dropdown existente que solo use strings.
+    local function optText(entry)
+        if type(entry) == "table" then return entry.Text or entry[1] or "" end
+        return entry
+    end
+    local function optIcon(entry)
+        if type(entry) == "table" then return entry.Icon or entry.Image or entry[2] or nil end
+        return nil
+    end
+
     -- 🧹 Stale-option guard: if the saved value no longer exists in the option
     -- list (it was renamed or deleted since last run) we silently fall back to
     -- the script default / first option instead of showing a ghost entry.
     local function optionExists(v)
-        for _, o in ipairs(options) do if o == v then return true end end
+        for _, o in ipairs(options) do if optText(o) == v then return true end end
         return false
     end
     local function fallbackValue()
         if default ~= nil and optionExists(default) then return default end
-        return options[1] or ""
+        return (options[1] and optText(options[1])) or ""
     end
-    applyDefault(flagName, default, options[1] or "")
+    applyDefault(flagName, default, (options[1] and optText(options[1])) or "")
     if not optionExists(Config[flagName]) then
         Config[flagName] = fallbackValue()
         saveConfig()
@@ -3536,16 +3573,18 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
     local LIST_PAD_V = 6 -- 3 arriba + 3 abajo
 
     local open = false
+    local MAX_LIST_H = 150 -- antes 126: con filas más grandes (32px) sigue mostrando ~4 opciones cómodas
     
     local function setDropdownOpen(shouldOpen)
         open = shouldOpen
-        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 126) or 0
+        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, MAX_LIST_H) or 0
         if SearchBox then SearchBox.Visible = open if not open then SearchBox.Text = "" end end
         
         TweenService:Create(DDFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36 + targetH + searchHeight + (open and 6 or 0))}):Play()
         TweenService:Create(OptsScroll, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
         TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
         OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
+        if open then scrollItemIntoView(self.Frame, DDFrame, targetH + searchHeight + 6) end
     end
 
     connect(Trigger.MouseButton1Click, function()
@@ -3561,16 +3600,29 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
         safeCall("callback", callback, name)
     end
 
+    local OPT_ROW_H = 32 -- antes 27: un poco más grande, a pedido, para que los íconos respiren
     local function makeOptions()
         for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
-        for i, name in ipairs(options) do
+        for i, entry in ipairs(options) do
+            local name = optText(entry)
+            local icon = optIcon(entry)
             local selected = (name == Flags[flagName].CurrentValue)
-            local OptBtn = create("TextButton", {Size = UDim2.new(1, 0, 0, 27), BackgroundColor3 = selected and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27), Text = name, TextColor3 = selected and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 11, LayoutOrder = i}, OptsScroll)
+            local textLeftPad = icon and 36 or 10
+            local OptBtn = create("TextButton", {Size = UDim2.new(1, 0, 0, OPT_ROW_H), BackgroundColor3 = selected and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27), Text = "", LayoutOrder = i}, OptsScroll)
+            OptBtn:SetAttribute("OptText", name) -- usado por el filtro de búsqueda (ya no hay texto en OptBtn.Text)
             create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
             if selected then
                 create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 0.45}, OptBtn)
             end
-            
+            if icon then
+                -- 🖼️ Miniatura recortada y con "Fit": nunca se sale de su marco
+                -- sin importar la proporción real de la imagen/rbxassetid.
+                local ImgHolder = create("Frame", {Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 6, 0.5, -12), BackgroundColor3 = Color3.fromRGB(14, 14, 17), ClipsDescendants = true}, OptBtn)
+                create("UICorner", {CornerRadius = UDim.new(0, 6)}, ImgHolder)
+                create("ImageLabel", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Image = icon, ScaleType = Enum.ScaleType.Fit}, ImgHolder)
+            end
+            create("TextLabel", {Size = UDim2.new(1, -(textLeftPad + 8), 1, 0), Position = UDim2.new(0, textLeftPad, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = selected and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, OptBtn)
+
             connect(OptBtn.MouseButton1Click, function()
                 playUISound()
                 selectOption(name)
@@ -3585,11 +3637,14 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
         connect(SearchBox:GetPropertyChangedSignal("Text"), function()
             local filter = string.lower(SearchBox.Text)
             for _, child in ipairs(OptsScroll:GetChildren()) do
-                if child:IsA("TextButton") then child.Visible = (filter == "") or string.find(string.lower(child.Text), filter) and true or false end
+                if child:IsA("TextButton") then
+                    local optText2 = string.lower(child:GetAttribute("OptText") or "")
+                    child.Visible = (filter == "") or (string.find(optText2, filter) and true or false)
+                end
             end
             task.defer(function()
                 if not open then return end
-                local targetH = math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 126)
+                local targetH = math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, MAX_LIST_H)
                 DDFrame.Size = UDim2.new(1, 0, 0, 36 + targetH + searchHeight + 6)
                 OptsScroll.Size = UDim2.new(1, -16, 0, targetH)
                 OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
@@ -3643,6 +3698,55 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
     
     KillerHub.Elements[flagName] = ddObj
     return ddObj
+end
+
+-- ============================================================================
+-- 🧑‍🤝‍🧑 V6.0: CreatePlayerDropdown — dropdown con la lista de jugadores del
+-- servidor, cada uno con su foto de perfil de Roblox (avatar headshot) para
+-- identificarlos de un vistazo. Se construye ENCIMA de CreateDropdown (no
+-- duplica nada: búsqueda, auto-scroll, temas, animaciones... todo se hereda
+-- gratis) y se mantiene sincronizado con Players.PlayerAdded/PlayerRemoving
+-- — sin polling, cero costo mientras nadie entra o sale.
+-- opts (opcional):
+--   • excludeLocalPlayer (bool) → no listarte a ti mismo
+-- El valor guardado en Config/Flags es el Name (string, el username) del
+-- jugador elegido — estable aunque cambie su DisplayName a mitad de partida.
+-- ============================================================================
+function TabMethods:CreatePlayerDropdown(flagName, text, callback, opts)
+    opts = opts or {}
+    local function playerEntry(p)
+        local ok, uid = pcall(function() return p.UserId end)
+        local icon = ok and string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150", uid) or nil
+        return {Text = p.Name, Icon = icon}
+    end
+
+    local function buildEntries()
+        local list = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if not (opts.excludeLocalPlayer and p == LocalPlayer) then
+                table.insert(list, playerEntry(p))
+            end
+        end
+        table.sort(list, function(a, b) return a.Text < b.Text end)
+        return list
+    end
+
+    -- CreateDropdown ya sabe pintar {Text=, Icon=}; el "Text" que guarda en
+    -- Config sigue siendo el Name real del jugador (estable para joins/leaves),
+    -- así que el resto de la librería (Config, SetFlag, etc.) no nota diferencia.
+    local dd = self:CreateDropdown(flagName, text, buildEntries(), callback, nil)
+    if not dd then return nil end
+
+    local function onRosterChanged()
+        task.defer(function() dd:Refresh(buildEntries()) end)
+    end
+    connect(Players.PlayerAdded, onRosterChanged)
+    connect(Players.PlayerRemoving, onRosterChanged)
+
+    dd.GetSelectedPlayer = function()
+        return Players:FindFirstChild(Flags[flagName] and Flags[flagName].CurrentValue or "")
+    end
+    return dd
 end
 
 function TabMethods:CreateMultiDropdown(flagName, text, options, callback, default)
@@ -3707,6 +3811,7 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
         TweenService:Create(OptsScroll, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
         TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
         OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
+        if open then scrollItemIntoView(self.Frame, MFrame, targetH + 6) end
     end)
 
     local cacheButtons = {}
@@ -3825,6 +3930,7 @@ function TabMethods:CreateToggleColorPicker(flagToggle, flagColor, text, default
         open = not open playUISound() 
         TweenService:Create(MasterFrame, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, open and OPEN_H or CLOSED_H)}):Play()
         if not open then saveConfig() end -- 💾 Autoguardado explícito al cerrar el menú del color picker
+        if open then scrollItemIntoView(self.Frame, MasterFrame, OPEN_H - CLOSED_H) end
     end)
     
     table.insert(KillerHub.TargetThemeElements, function() stateUpdate() Panel.ApplyTheme() end)
@@ -3884,6 +3990,7 @@ function TabMethods:CreateColorPicker(flagColor, text, defaultColor, callback)
         open = not open playUISound() 
         TweenService:Create(MasterFrame, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, open and OPEN_H or CLOSED_H)}):Play()
         if not open then saveConfig() end -- 💾 Autoguardado explícito al cerrar el menú del color picker
+        if open then scrollItemIntoView(self.Frame, MasterFrame, OPEN_H - CLOSED_H) end
     end)
     
     table.insert(KillerHub.TargetThemeElements, Panel.ApplyTheme)
