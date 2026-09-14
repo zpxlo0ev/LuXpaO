@@ -1827,11 +1827,20 @@ end
 local function scrollWidgetIntoView(scrollFrame, widgetFrame, growBy)
     if not scrollFrame or not widgetFrame then return end
     if not scrollFrame:IsA("ScrollingFrame") then return end
+    growBy = math.max(growBy or 0, 0)
     local viewportBottom = scrollFrame.AbsolutePosition.Y + scrollFrame.AbsoluteSize.Y
-    local widgetBottom = widgetFrame.AbsolutePosition.Y + widgetFrame.AbsoluteSize.Y + math.max(growBy or 0, 0)
+    local widgetBottom = widgetFrame.AbsolutePosition.Y + widgetFrame.AbsoluteSize.Y + growBy
     if widgetBottom <= viewportBottom then return end -- ya es visible, nada que hacer
     local overflow = (widgetBottom - viewportBottom) + 10
-    local maxCanvasY = math.max(0, scrollFrame.CanvasSize.Y.Offset - scrollFrame.AbsoluteSize.Y)
+    -- 🩹 FIX: si el widget es el ÚLTIMO de la lista (nada más debajo), el
+    -- CanvasSize actual todavía NO incluye el espacio que va a ocupar al
+    -- crecer (el UIListLayout recién lo agrega el frame SIGUIENTE), así que
+    -- el límite quedaba corto y el scroll no llegaba a moverse — se veía
+    -- como si la animación "no hiciera nada" al abrirlo hasta abajo. Sumamos
+    -- el crecimiento previsto (growBy) al CanvasSize antes de calcular el
+    -- límite, para que el scroll SÍ pueda alcanzar el contenido nuevo.
+    local anticipatedCanvasH = scrollFrame.CanvasSize.Y.Offset + growBy
+    local maxCanvasY = math.max(0, anticipatedCanvasH - scrollFrame.AbsoluteSize.Y)
     local newY = math.min(scrollFrame.CanvasPosition.Y + overflow, maxCanvasY)
     if newY <= scrollFrame.CanvasPosition.Y then return end
     TweenService:Create(scrollFrame, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
@@ -2103,7 +2112,9 @@ local function safeCall(context, fn, ...)
     if type(fn) ~= "function" then return end
     local args = table.pack(...)
     local ok, err = xpcall(function() return fn(table.unpack(args, 1, args.n)) end, function(e)
-        local tb = debug.traceback(tostring(e), 2)
+        -- 🛡️ Algunos ejecutores muy restringidos no exponen `debug` completo;
+        -- si falta, seguimos con el mensaje crudo en vez de romper el xpcall.
+        local tb = (debug and debug.traceback) and debug.traceback(tostring(e), 2) or tostring(e)
         warn("⚠️ [KillerHub] Error en '" .. tostring(context) .. "':\n" .. tb)
         return tostring(e)
     end)
@@ -3585,7 +3596,7 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
     
     local function setDropdownOpen(shouldOpen)
         open = shouldOpen
-        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 152) or 0
+        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 184) or 0
         if SearchBox then SearchBox.Visible = open if not open then SearchBox.Text = "" end end
         
         TweenService:Create(DDFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36 + targetH + searchHeight + (open and 6 or 0))}):Play()
@@ -3612,7 +3623,7 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
         safeCall("callback", callback, name)
     end
 
-    local ROW_H, AVATAR_SIZE = 34, 22
+    local ROW_H, AVATAR_SIZE = 42, 32
     local function makeOptions()
         for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
         for i, name in ipairs(options) do
@@ -3624,7 +3635,7 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
                 BackgroundColor3 = selected and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
                 Text = player and "" or name, -- con avatar, el nombre va en su propio TextLabel (ver abajo)
                 TextColor3 = txtColor, TextXAlignment = Enum.TextXAlignment.Center,
-                Font = Enum.Font.GothamMedium, TextSize = 11.5, LayoutOrder = i
+                Font = Enum.Font.GothamMedium, TextSize = 12.5, LayoutOrder = i
             }, OptsScroll)
             create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
             if selected then
@@ -3644,7 +3655,7 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
                     Size = UDim2.new(1, -(8 + AVATAR_SIZE + 8 + 8), 1, 0),
                     Position = UDim2.new(0, 8 + AVATAR_SIZE + 8, 0, 0),
                     BackgroundTransparency = 1, Text = name, TextColor3 = txtColor,
-                    Font = Enum.Font.GothamMedium, TextSize = 11.5,
+                    Font = Enum.Font.GothamMedium, TextSize = 12.5,
                     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
                     TextTruncate = Enum.TextTruncate.AtEnd
                 }, OptBtn)
@@ -3668,7 +3679,7 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
             end
             task.defer(function()
                 if not open then return end
-                local targetH = math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 152)
+                local targetH = math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 184)
                 DDFrame.Size = UDim2.new(1, 0, 0, 36 + targetH + searchHeight + 6)
                 OptsScroll.Size = UDim2.new(1, -16, 0, targetH)
                 OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
@@ -3781,7 +3792,7 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
     local open = false
     connect(Trigger.MouseButton1Click, function()
         open = not open playUISound()
-        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 152) or 0
+        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 184) or 0
         TweenService:Create(MFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36 + targetH + (open and 6 or 0))}):Play()
         TweenService:Create(OptsScroll, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
         TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
@@ -3793,7 +3804,7 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
     end)
 
     local cacheButtons = {}
-    local ROW_H, AVATAR_SIZE = 34, 22
+    local ROW_H, AVATAR_SIZE = 42, 32
     local cacheLabels = {}
     local function makeList()
         for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
@@ -3808,7 +3819,7 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
                 Size = UDim2.new(1, 0, 0, ROW_H),
                 BackgroundColor3 = isChosen and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
                 Text = player and "" or name, TextXAlignment = Enum.TextXAlignment.Center,
-                TextColor3 = txtColor, Font = Enum.Font.GothamMedium, TextSize = 11.5, LayoutOrder = i
+                TextColor3 = txtColor, Font = Enum.Font.GothamMedium, TextSize = 12.5, LayoutOrder = i
             }, OptsScroll)
             create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
             local OptGlow = create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = isChosen and 0.45 or 1}, OptBtn)
@@ -3827,7 +3838,7 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
                     Size = UDim2.new(1, -(8 + AVATAR_SIZE + 8 + 8), 1, 0),
                     Position = UDim2.new(0, 8 + AVATAR_SIZE + 8, 0, 0),
                     BackgroundTransparency = 1, Text = name, TextColor3 = txtColor,
-                    Font = Enum.Font.GothamMedium, TextSize = 11.5,
+                    Font = Enum.Font.GothamMedium, TextSize = 12.5,
                     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
                     TextTruncate = Enum.TextTruncate.AtEnd
                 }, OptBtn)
