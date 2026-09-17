@@ -2478,7 +2478,7 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
     local RainbowRow = create("Frame", {Position = UDim2.new(0, 12, 0, contentTop + 136), Size = UDim2.new(1, -24, 0, 30), BackgroundColor3 = Color3.fromRGB(20, 20, 24), BackgroundTransparency = 0.3}, MasterFrame)
     create("UICorner", {CornerRadius = UDim.new(0, 10)}, RainbowRow)
     local RainbowStroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, RainbowRow)
-    local RainbowLabel = create("TextLabel", {Size = UDim2.new(1, -60, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "RGB mode (Rainbow)", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamMedium, TextSize = 11.5, TextXAlignment = Enum.TextXAlignment.Left}, RainbowRow)
+    local RainbowLabel = create("TextLabel", {Size = UDim2.new(1, -164, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "RGB mode", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamMedium, TextSize = 11.5, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, RainbowRow)
     local RainbowBtn = create("TextButton", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = ""}, RainbowRow)
     local RTrack = create("Frame", {Size = UDim2.new(0, 36, 0, 20), Position = UDim2.new(1, -46, 0.5, -10), BackgroundColor3 = Color3.fromRGB(38, 38, 44)}, RainbowRow)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, RTrack)
@@ -2486,8 +2486,53 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
     local RKnob = create("Frame", {Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, 2, 0.5, -8), BackgroundColor3 = CurrentTheme.TEXT_WHITE}, RTrack)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, RKnob)
 
+    -- ⚡ Control de velocidad del modo RGB: −  ×1.0  + , rango ×0.5 a ×5.0,
+    -- editable también con el teclado (tocar el numerito y escribir directo).
+    -- Vive pegado a la izquierda del toggle, dentro de la misma fila.
+    local SpeedGroup = create("Frame", {Size = UDim2.new(0, 92, 0, 22), Position = UDim2.new(1, -146, 0.5, -11), BackgroundTransparency = 1}, RainbowRow)
+    local SpeedMinus = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(0, 0, 0.5, -10), BackgroundColor3 = Color3.fromRGB(30, 30, 35), Text = "-", TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamBold, TextSize = 13, AutoButtonColor = false}, SpeedGroup)
+    create("UICorner", {CornerRadius = UDim.new(0, 6)}, SpeedMinus)
+    create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, SpeedMinus)
+    local SpeedBox = create("TextBox", {Size = UDim2.new(0, 46, 0, 20), Position = UDim2.new(0, 23, 0.5, -10), BackgroundColor3 = Color3.fromRGB(16, 16, 20), Text = "×1.0", TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = 11, ClearTextOnFocus = false}, SpeedGroup)
+    create("UICorner", {CornerRadius = UDim.new(0, 6)}, SpeedBox)
+    create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, SpeedBox)
+    local SpeedPlus = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(0, 72, 0.5, -10), BackgroundColor3 = Color3.fromRGB(30, 30, 35), Text = "+", TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamBold, TextSize = 13, AutoButtonColor = false}, SpeedGroup)
+    create("UICorner", {CornerRadius = UDim.new(0, 6)}, SpeedPlus)
+    create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, SpeedPlus)
+    addInteractiveFeedback(SpeedMinus)
+    addInteractiveFeedback(SpeedPlus)
+
     local h, s, v = color3ToHSV(savedColor)
     local rainbowActive = Config[flagColor .. "_Rainbow"] == true
+
+    -- ⚡ Velocidad del modo RGB: ×0.5 a ×5.0, por defecto ×1.0. Se guarda por
+    -- flagColor así que cada color picker recuerda la suya. Barato: solo un
+    -- número que multiplica el incremento de tono dentro de rainbowStep, no
+    -- agrega ningún trabajo extra por frame.
+    local SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.5, 5.0, 0.1
+    local rbSpeed = Config[flagColor .. "_RGBSpeed"]
+    if type(rbSpeed) ~= "number" then rbSpeed = 1.0 end
+    rbSpeed = math.clamp(rbSpeed, SPEED_MIN, SPEED_MAX)
+    local function refreshSpeedBox()
+        SpeedBox.Text = string.format("×%.1f", rbSpeed)
+    end
+    refreshSpeedBox()
+    local function setSpeed(newSpeed)
+        rbSpeed = math.clamp(math.floor(newSpeed * 10 + 0.5) / 10, SPEED_MIN, SPEED_MAX)
+        Config[flagColor .. "_RGBSpeed"] = rbSpeed
+        refreshSpeedBox()
+        saveConfig()
+    end
+    connect(SpeedMinus.MouseButton1Click, function() playUISound() setSpeed(rbSpeed - SPEED_STEP) end)
+    connect(SpeedPlus.MouseButton1Click, function() playUISound() setSpeed(rbSpeed + SPEED_STEP) end)
+    connect(SpeedBox.FocusLost, function(enterPressed)
+        -- Editable con el teclado: escribís el número (con o sin "×") y con
+        -- Enter o al perder el foco se aplica, clampeado al rango permitido.
+        local raw = SpeedBox.Text:gsub("[×xX]", ""):gsub(",", ".")
+        local parsed = tonumber(raw)
+        if parsed then setSpeed(parsed) else refreshSpeedBox() end
+    end)
+    addInteractiveFeedback(SpeedBox)
     local rainbowConn = nil
 
     local pendingSave = false
@@ -2531,7 +2576,7 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
     -- causaría lag; así se mantiene fluido a 60fps mientras solo persiste 1 vez/seg
     local rbSaveAcc, rbCallbackAcc = 0, 0
     local function rainbowStep(dt)
-        h = (h + dt * 0.15) % 1
+        h = (h + dt * 0.15 * rbSpeed) % 1
         local col = color3FromHSV(h, s, v)
         Config[flagColor] = {col.R, col.G, col.B}
         updateGlobalFlags(flagColor, col)
@@ -2679,6 +2724,7 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
         ApplyTheme = function()
             RainbowStroke.Color = CurrentTheme.BORDER
             RTrackGlow.Color = CurrentTheme.GLOW or CurrentTheme.ACCENT
+            SpeedBox.TextColor3 = CurrentTheme.ACCENT
             setRainbowVisual(rainbowActive)
         end
     }
@@ -3623,19 +3669,29 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
         safeCall("callback", callback, name)
     end
 
-    local ROW_H, AVATAR_SIZE = 42, 32
+    local PLAYER_ROW_H, GENERIC_ROW_H, AVATAR_SIZE = 42, 28, 32
     local function makeOptions()
         for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
+        -- 🧑‍🤝‍🧑 Se detecta UNA sola vez por refresco (no por fila): si esta
+        -- lista tiene al menos un jugador conectado entre sus opciones, TODA
+        -- la lista usa el tamaño grande (para que se aprecie el avatar). Si es
+        -- una lista genérica (armas, modos, lo que sea), se queda compacta.
+        local isPlayerList = false
+        for _, o in ipairs(options) do
+            if findPlayerByOptionName(o) then isPlayerList = true break end
+        end
+        local rowH = isPlayerList and PLAYER_ROW_H or GENERIC_ROW_H
+        local textSz = isPlayerList and 12.5 or 11
         for i, name in ipairs(options) do
             local selected = (name == Flags[flagName].CurrentValue)
-            local player = findPlayerByOptionName(name)
+            local player = isPlayerList and findPlayerByOptionName(name) or nil
             local txtColor = selected and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
             local OptBtn = create("TextButton", {
-                Size = UDim2.new(1, 0, 0, ROW_H),
+                Size = UDim2.new(1, 0, 0, rowH),
                 BackgroundColor3 = selected and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
-                Text = player and "" or name, -- con avatar, el nombre va en su propio TextLabel (ver abajo)
+                Text = player and "" or name, -- con avatar, el nombre va en su propio grupo centrado (ver abajo)
                 TextColor3 = txtColor, TextXAlignment = Enum.TextXAlignment.Center,
-                Font = Enum.Font.GothamMedium, TextSize = 12.5, LayoutOrder = i
+                Font = Enum.Font.GothamMedium, TextSize = textSz, LayoutOrder = i
             }, OptsScroll)
             create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
             if selected then
@@ -3643,22 +3699,29 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
             end
 
             if player then
+                -- 🎯 Grupo "avatar + nombre" con AutomaticSize: se centra como
+                -- una unidad en medio de la fila (antes el avatar quedaba
+                -- pegado a la esquina izquierda). Nada de esto corre por
+                -- frame — se arma una sola vez al abrir/filtrar la lista.
+                local group = create("Frame", {
+                    BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.X,
+                    Size = UDim2.new(0, 0, 0, AVATAR_SIZE),
+                    AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0)
+                }, OptBtn)
+                create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, group)
                 local avatar = create("ImageLabel", {
                     Size = UDim2.new(0, AVATAR_SIZE, 0, AVATAR_SIZE),
-                    Position = UDim2.new(0, 8, 0.5, -AVATAR_SIZE / 2),
-                    BackgroundColor3 = Color3.fromRGB(16, 16, 20),
+                    BackgroundColor3 = Color3.fromRGB(16, 16, 20), LayoutOrder = 1,
                     Image = string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=48&h=48", player.UserId)
-                }, OptBtn)
+                }, group)
                 create("UICorner", {CornerRadius = UDim.new(1, 0)}, avatar)
                 create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER, Transparency = 0.25}, avatar)
                 create("TextLabel", {
-                    Size = UDim2.new(1, -(8 + AVATAR_SIZE + 8 + 8), 1, 0),
-                    Position = UDim2.new(0, 8 + AVATAR_SIZE + 8, 0, 0),
+                    Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X, LayoutOrder = 2,
                     BackgroundTransparency = 1, Text = name, TextColor3 = txtColor,
-                    Font = Enum.Font.GothamMedium, TextSize = 12.5,
-                    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
-                    TextTruncate = Enum.TextTruncate.AtEnd
-                }, OptBtn)
+                    Font = Enum.Font.GothamMedium, TextSize = textSz,
+                    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center
+                }, group)
             end
             
             connect(OptBtn.MouseButton1Click, function()
@@ -3804,44 +3867,54 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
     end)
 
     local cacheButtons = {}
-    local ROW_H, AVATAR_SIZE = 42, 32
+    local PLAYER_ROW_H, GENERIC_ROW_H, AVATAR_SIZE = 42, 28, 32
     local cacheLabels = {}
     local function makeList()
         for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
         table.clear(cacheButtons)
         table.clear(cacheLabels)
+
+        local isPlayerList = false
+        for _, o in ipairs(options) do
+            if findPlayerByOptionName(o) then isPlayerList = true break end
+        end
+        local rowH = isPlayerList and PLAYER_ROW_H or GENERIC_ROW_H
+        local textSz = isPlayerList and 12.5 or 11
         
         for i, name in ipairs(options) do
             local isChosen = Config[flagName][name] or false
-            local player = findPlayerByOptionName(name)
+            local player = isPlayerList and findPlayerByOptionName(name) or nil
             local txtColor = isChosen and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
             local OptBtn = create("TextButton", {
-                Size = UDim2.new(1, 0, 0, ROW_H),
+                Size = UDim2.new(1, 0, 0, rowH),
                 BackgroundColor3 = isChosen and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
                 Text = player and "" or name, TextXAlignment = Enum.TextXAlignment.Center,
-                TextColor3 = txtColor, Font = Enum.Font.GothamMedium, TextSize = 12.5, LayoutOrder = i
+                TextColor3 = txtColor, Font = Enum.Font.GothamMedium, TextSize = textSz, LayoutOrder = i
             }, OptsScroll)
             create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
             local OptGlow = create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = isChosen and 0.45 or 1}, OptBtn)
             cacheButtons[name] = OptBtn
 
             if player then
+                local group = create("Frame", {
+                    BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.X,
+                    Size = UDim2.new(0, 0, 0, AVATAR_SIZE),
+                    AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0)
+                }, OptBtn)
+                create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, group)
                 local avatar = create("ImageLabel", {
                     Size = UDim2.new(0, AVATAR_SIZE, 0, AVATAR_SIZE),
-                    Position = UDim2.new(0, 8, 0.5, -AVATAR_SIZE / 2),
-                    BackgroundColor3 = Color3.fromRGB(16, 16, 20),
+                    BackgroundColor3 = Color3.fromRGB(16, 16, 20), LayoutOrder = 1,
                     Image = string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=48&h=48", player.UserId)
-                }, OptBtn)
+                }, group)
                 create("UICorner", {CornerRadius = UDim.new(1, 0)}, avatar)
                 create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER, Transparency = 0.25}, avatar)
                 local nameLabel = create("TextLabel", {
-                    Size = UDim2.new(1, -(8 + AVATAR_SIZE + 8 + 8), 1, 0),
-                    Position = UDim2.new(0, 8 + AVATAR_SIZE + 8, 0, 0),
+                    Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X, LayoutOrder = 2,
                     BackgroundTransparency = 1, Text = name, TextColor3 = txtColor,
-                    Font = Enum.Font.GothamMedium, TextSize = 12.5,
-                    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
-                    TextTruncate = Enum.TextTruncate.AtEnd
-                }, OptBtn)
+                    Font = Enum.Font.GothamMedium, TextSize = textSz,
+                    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center
+                }, group)
                 cacheLabels[name] = nameLabel
             end
             
