@@ -1792,6 +1792,64 @@ InteractiveBaseColor.resolve = function(inst)
     return InteractiveBaseColor[inst] or inst.BackgroundColor3
 end
 
+-- ============================================================================
+-- 💧 V5.9.5 · EFECTO "LIQUID GLASS" (sliders / toggles)
+-- ----------------------------------------------------------------------------
+-- Mismo lenguaje visual que el "Liquid Glass" de iOS y el que logran otras
+-- UI libs de Roblox (WindUI incluida) con imágenes pre-renderizadas: acá se
+-- consigue 100% con Instances nativas (UIGradient), sin descargar ni depender
+-- de ningún asset externo — más liviano y no depende de que el executor
+-- pueda cachear imágenes.
+--   • Sheen(inst)   → brillo diagonal ESTÁTICO (blanco→transparente→blanco).
+--                      Una sola Instance, cero costo por frame, queda ahí fijo
+--                      dando la sensación de "cristal" curvo.
+--   • Shine(inst)   → UN barrido de brillo (tween corto) — se dispara solo en
+--                      eventos puntuales (togglear, empezar/soltar drag), NUNCA
+--                      en cada pixel de arrastre, para no gastar de más.
+--   • Squish(inst)  → "rebote líquido" elástico vía UIScale (no toca Size/
+--                      Position reales, así que no puede desalinear nada que
+--                      dependa de esos valores, como el drag del slider).
+-- Todo Shine/Squish respeta _animEnabled(): con UiLite o animaciones off, no
+-- se dispara ningún tween (Sheen es estático y se queda, no cuesta nada).
+-- Vive en UNA sola tabla → un solo slot de local en el chunk principal.
+-- ============================================================================
+local _khGlass = {}
+do
+    function _khGlass.Sheen(inst, rotation)
+        local grad = create("UIGradient", {
+            Name = "KH_GlassSheen",
+            Rotation = rotation or 100,
+            Color = ColorSequence.new(Color3.fromRGB(255, 255, 255)),
+            Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.62),
+                NumberSequenceKeypoint.new(0.48, 0.90),
+                NumberSequenceKeypoint.new(1, 0.62),
+            }),
+        }, inst)
+        return grad
+    end
+
+    function _khGlass.Shine(inst)
+        if not _animEnabled() then return end
+        local grad = inst and inst:FindFirstChild("KH_GlassSheen")
+        if not grad then return end
+        grad.Offset = Vector2.new(-1.1, 0)
+        TweenService:Create(grad, TweenInfo.new(0.42, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Offset = Vector2.new(1.1, 0)}):Play()
+    end
+
+    function _khGlass.Squish(inst)
+        if not _animEnabled() then return end
+        local scale = inst:FindFirstChildOfClass("UIScale")
+        if not scale then scale = create("UIScale", {Name = "KH_GlassScale", Scale = 1}, inst) end
+        TweenService:Create(scale, TweenInfo.new(0.07, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 0.78}):Play()
+        task.delay(0.07, function()
+            if scale and scale.Parent then
+                TweenService:Create(scale, TweenInfo.new(0.32, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {Scale = 1}):Play()
+            end
+        end)
+    end
+end
+
 local function addInteractiveFeedback(inst)
     if not inst:IsA("TextButton") then return end
     InteractiveBaseColor[inst] = InteractiveBaseColor[inst] or inst.BackgroundColor3
@@ -3111,8 +3169,10 @@ function TabMethods:CreateToggle(flagName, text, callback, default)
     local Track = create("Frame", {Size = UDim2.new(0, 36, 0, 20), Position = UDim2.new(1, -48, 0.5, -10), BackgroundColor3 = Config[flagName] and CurrentTheme.ACCENT or Color3.fromRGB(38, 38, 44)}, ToggleButton)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, Track)
     local TrackGlow = create("UIStroke", {Thickness = 1.2, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = Config[flagName] and 0.35 or 1}, Track)
+    _khGlass.Sheen(Track) -- 💧 brillo de cristal fijo sobre el track
     local Knob = create("Frame", {Size = UDim2.new(0, 16, 0, 16), Position = Config[flagName] and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8), BackgroundColor3 = CurrentTheme.TEXT_WHITE}, Track)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, Knob)
+    _khGlass.Sheen(Knob, 120) -- 💧 la bolita también es "de vidrio"
 
     local function stateUpdate()
         local active = Flags[flagName].CurrentValue
@@ -3126,6 +3186,8 @@ function TabMethods:CreateToggle(flagName, text, callback, default)
         TweenService:Create(Knob, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
             Position = active and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
         }):Play()
+        _khGlass.Shine(Track) -- 💧 barrido de brillo al togglear
+        _khGlass.Squish(Knob) -- 💧 rebote líquido de la bolita
     end
     
     local function executeSet(bool)
@@ -3233,8 +3295,10 @@ function TabMethods:CreateToggleSlider(flagToggle, flagSlider, text, min, max, c
     local Track = create("Frame", {Size = UDim2.new(0, 36, 0, 20), Position = UDim2.new(1, -48, 0.5, -10), BackgroundColor3 = Config[flagToggle] and CurrentTheme.ACCENT or Color3.fromRGB(38, 38, 44)}, ToggleButton)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, Track)
     local TrackGlow = create("UIStroke", {Thickness = 1.2, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = Config[flagToggle] and 0.35 or 1}, Track)
+    _khGlass.Sheen(Track) -- 💧 brillo de cristal fijo sobre el track
     local Knob = create("Frame", {Size = UDim2.new(0, 16, 0, 16), Position = Config[flagToggle] and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8), BackgroundColor3 = CurrentTheme.TEXT_WHITE}, Track)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, Knob)
+    _khGlass.Sheen(Knob, 120)
 
     -- Divisor sutil: marca la separación visual sin abrir un hueco vacío enorme
     local Divider = create("Frame", {Size = UDim2.new(1, -24, 0, 1), Position = UDim2.new(0, 12, 0, 35), BackgroundColor3 = CurrentTheme.BORDER, BackgroundTransparency = 0.55, BorderSizePixel = 0}, TSFrame)
@@ -3253,10 +3317,12 @@ function TabMethods:CreateToggleSlider(flagToggle, flagSlider, text, min, max, c
     local SFill = create("Frame", {BackgroundColor3 = CurrentTheme.ACCENT}, STrack)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, SFill)
     local SFillGlow = create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 0.5}, SFill)
+    _khGlass.Sheen(SFill) -- 💧 relleno con brillo de cristal líquido
     
     local SKnob = create("TextButton", {Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, -8, 0.5, -8), BackgroundColor3 = CurrentTheme.TEXT_WHITE, Text = "", AutoButtonColor = false}, STrack)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, SKnob)
     local SKnobGlow = create("UIStroke", {Thickness = 1.2, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 0.4}, SKnob)
+    _khGlass.Sheen(SKnob, 120)
     -- 🎯 Hitbox invisible SOLO sobre la bolita: agranda el área táctil sin cambiar
     -- el diseño. El track ya NO inicia arrastre (evita toques involuntarios al
     -- deslizar la UI con el dedo).
@@ -3276,6 +3342,8 @@ function TabMethods:CreateToggleSlider(flagToggle, flagSlider, text, min, max, c
             TweenService:Create(Track, TOGGLE_TWEEN, {BackgroundColor3 = trackColor}):Play()
             TweenService:Create(TrackGlow, TOGGLE_TWEEN, {Transparency = active and 0.35 or 1}):Play()
             TweenService:Create(Knob, TOGGLE_TWEEN, {Position = knobPos}):Play()
+            _khGlass.Shine(Track) -- 💧 barrido de brillo (solo en cambios animados reales)
+            _khGlass.Squish(Knob)
         else
             Track.BackgroundColor3 = trackColor
             TrackGlow.Transparency = active and 0.35 or 1
@@ -3346,6 +3414,7 @@ function TabMethods:CreateToggleSlider(flagToggle, flagSlider, text, min, max, c
         if dragConn then dragConn:Disconnect() dragConn = nil end
         if endConn then endConn:Disconnect() endConn = nil end
         saveConfig()
+        _khGlass.Shine(SFill) -- 💧 brillo al soltar
     end
 
     -- ✋ El arrastre SOLO se inicia tocando la bolita (knob). Tocar el track no
@@ -3355,6 +3424,8 @@ function TabMethods:CreateToggleSlider(flagToggle, flagSlider, text, min, max, c
         if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
         sliding = true
         activeInput = input
+        _khGlass.Squish(SKnob) -- 💧 rebote líquido al agarrar la bolita
+        _khGlass.Shine(SFill) -- 💧 brillo al empezar a mover
         dragConn = UserInputService.InputChanged:Connect(function(changedInput)
             if not sliding then return end
             if changedInput ~= activeInput and changedInput.UserInputType ~= Enum.UserInputType.MouseMovement then return end
@@ -3446,10 +3517,12 @@ function TabMethods:CreateSlider(flagName, text, min, max, callback, default)
     local Fill = create("Frame", {BackgroundColor3 = CurrentTheme.ACCENT}, Track)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, Fill)
     local FillGlow = create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 0.5}, Fill)
+    _khGlass.Sheen(Fill) -- 💧 relleno con brillo de cristal líquido
     
     local Knob = create("TextButton", {Size = UDim2.new(0, 18, 0, 18), Position = UDim2.new(0, -9, 0.5, -9), BackgroundColor3 = CurrentTheme.TEXT_WHITE, Text = "", AutoButtonColor = false}, Track)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, Knob)
     local KnobGlow = create("UIStroke", {Thickness = 1.4, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 0.4}, Knob)
+    _khGlass.Sheen(Knob, 120)
     -- 🎯 Hitbox invisible SOLO sobre la bolita (área táctil cómoda, mismo diseño)
     local KnobHit = create("TextButton", {Size = UDim2.new(0, 38, 0, 38), Position = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 10}, Knob)
 
@@ -3509,6 +3582,7 @@ function TabMethods:CreateSlider(flagName, text, min, max, callback, default)
         if dragConn then dragConn:Disconnect() dragConn = nil end
         if endConn then endConn:Disconnect() endConn = nil end
         saveConfig()
+        _khGlass.Shine(Fill) -- 💧 brillo al soltar
     end
 
     -- ✋ El arrastre SOLO se inicia tocando la bolita (knob). Tocar el track no
@@ -3518,6 +3592,8 @@ function TabMethods:CreateSlider(flagName, text, min, max, callback, default)
         if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
         sliding = true
         activeInput = input
+        _khGlass.Squish(Knob) -- 💧 rebote líquido al agarrar la bolita
+        _khGlass.Shine(Fill) -- 💧 brillo al empezar a mover
         dragConn = UserInputService.InputChanged:Connect(function(changedInput)
             if not sliding then return end
             if changedInput ~= activeInput and changedInput.UserInputType ~= Enum.UserInputType.MouseMovement then return end
