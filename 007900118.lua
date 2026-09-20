@@ -1,5 +1,32 @@
 -- ============================================================================
--- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.1)
+-- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.6)
+-- Changelog V5.9.6 (dropdowns de jugadores + Liquid Glass iOS + compatibilidad):
+--   • 🧑‍🤝‍🧑 DROPDOWNS DE JUGADORES REDISEÑADOS (CreateDropdown y CreateMultiDropdown).
+--       - Alineados: avatar en una columna fija a la izquierda, nombre alineado
+--         a la izquierda y, debajo, el otro nombre (@usuario o display name),
+--         ✓ a la derecha. Antes cada fila se centraba según el largo del nombre.
+--       - Buscador para listas de jugadores (y de más de 6 opciones): busca por
+--         usuario Y display name, sin distinguir mayúsculas, con botón ✕.
+--         Antes el filtro leía el texto del botón, que en filas con avatar está
+--         vacío → NO encontraba jugadores; además reventaba con caracteres como ( o %.
+--       - Opciones que no son jugadores (p.ej. "Todos") llevan un monograma para
+--         quedar alineadas con el resto. El jugador local se marca con "tú".
+--       - MultiDropdown: botones "Todos / Nada" (solo sobre lo que ves filtrado).
+--       - API nueva (aditiva): MultiDropdown ahora también tiene :Refresh() y
+--         :BindToDynamicList() y devuelve su objeto; Dropdown suma :Set() / :Get().
+--   • ⚡ RENDIMIENTO DE DROPDOWNS: las filas se crean SOLO al abrir (cerrado = 0
+--     filas); BindToDynamicList compara una firma de la lista y si no cambió no
+--     toca ni una Instance (antes destruía y recreaba TODAS las filas cada 2 s);
+--     las conexiones de las filas ya no se acumulan en la tabla global.
+--   • ⚡ Los toggles ya no lanzan 3 tweens + brillo + rebote cada uno al construir
+--     el hub ni al cambiar de tema (pintado instantáneo); con UI optimization
+--     tampoco animan al tocarlos.
+--   • 🍎 LIQUID GLASS ESTILO iOS: la bolita de toggles y sliders se LEVANTA al
+--     tocarla y se asienta con resorte (en sliders se queda levantada mientras
+--     arrastras). Sin bordes ni degradados nuevos en toggles/sliders.
+--   • 🖥 COMPATIBILIDAD (lo que hace WindUI y aquí faltaba): servicios con
+--     cloneref cuando el executor lo trae, syn_request como respaldo HTTP, y
+--     loadstring protegido en el cuadro de cálculo.
 -- Changelog V5.9.1 (compatibilidad + rendimiento):
 --   • 🖥 SOPORTE UNIVERSAL DE EJECUTORES (PC / Android / iOS). El error
 --     "no se puede cargar la UI library" en PC venía de 4 puntos que NO
@@ -185,14 +212,31 @@
 --     ColorSequence (arranque y cambio de tema), no por frame.
 -- ============================================================================
 
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local HttpService = game:GetService("HttpService")
-local Debris = game:GetService("Debris")
-local Workspace = game:GetService("Workspace")
-local Stats = game:GetService("Stats")
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
+-- 🧩 V5.9.6 · Servicios con cloneref (igual que WindUI): en los executors que lo
+-- traen, la librería trabaja con COPIAS de los servicios, así que si el juego
+-- hookea/inspecciona game:GetService no nos ve, y en algunos executors evita
+-- errores de permisos con CoreGui. Si no existe cloneref, se usa el servicio tal cual.
+local KH_svc = function(name)
+    local svc = game:GetService(name)
+    local cref = rawget(_G, "cloneref") or rawget(_G, "clonereference")
+    if not cref then
+        local ok, f = pcall(function() return cloneref or clonereference end)
+        cref = ok and f or nil
+    end
+    if type(cref) == "function" then
+        local ok, cloned = pcall(cref, svc)
+        if ok and cloned then return cloned end
+    end
+    return svc
+end
+local Players = KH_svc("Players")
+local UserInputService = KH_svc("UserInputService")
+local HttpService = KH_svc("HttpService")
+local Debris = KH_svc("Debris")
+local Workspace = KH_svc("Workspace")
+local Stats = KH_svc("Stats")
+local TweenService = KH_svc("TweenService")
+local RunService = KH_svc("RunService")
 -- 🧩 V5.9.1 · Arranque blindado para executors de PC (Wave, Solara, Swift,
 -- Xeno, Potassium...) que inyectan el script ANTES de que exista el jugador o
 -- la cámara. Antes esto reventaba con "attempt to index nil" y el usuario solo
@@ -253,6 +297,7 @@ do
         pcall(function() add(fluxus and fluxus.request) end)
         add(E.g("http_request"))
         add(E.g("request"))
+        add(E.g("syn_request")) -- V5.9.6: variante que WindUI también cubre
         return cands
     end
     -- Protección del ScreenGui (evita que el juego lo detecte/borre).
@@ -381,7 +426,7 @@ local function GetSafeUIParent()
     if ok and hui then return hui end
 
     local okCore, core = pcall(function()
-        local cg = game:GetService("CoreGui")
+        local cg = KH_svc("CoreGui")
         -- Prueba de escritura: si no tenemos permiso, esto falla aquí y no
         -- más adelante (cuando ya sería un crash visible).
         local probe = Instance.new("Folder")
@@ -1837,16 +1882,37 @@ do
         TweenService:Create(grad, TweenInfo.new(0.42, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Offset = Vector2.new(1.1, 0)}):Play()
     end
 
+    -- 🍎 V5.9.6 · Movimiento estilo iOS 26: la bolita se LEVANTA (crece) cuando la
+    -- tocas y se asienta con un rebote suave (antes se encogía). UIScale, así que
+    -- no toca Size/Position y no puede desalinear el drag del slider.
+    _khGlass.SPRING = TweenInfo.new(0.26, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    _khGlass.FAST = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    _khGlass.SETTLE = TweenInfo.new(0.34, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+    local function getScale(inst, create_)
+        local scale = inst:FindFirstChildOfClass("UIScale")
+        if not scale and create_ then scale = create("UIScale", {Name = "KH_GlassScale", Scale = 1}, inst) end
+        return scale
+    end
+
+    -- Toque puntual (toggle): sube y se asienta.
     function _khGlass.Squish(inst)
         if not _animEnabled() then return end
-        local scale = inst:FindFirstChildOfClass("UIScale")
-        if not scale then scale = create("UIScale", {Name = "KH_GlassScale", Scale = 1}, inst) end
-        TweenService:Create(scale, TweenInfo.new(0.07, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 0.78}):Play()
-        task.delay(0.07, function()
+        local scale = getScale(inst, true)
+        TweenService:Create(scale, _khGlass.FAST, {Scale = 1.22}):Play()
+        task.delay(0.09, function()
             if scale and scale.Parent then
-                TweenService:Create(scale, TweenInfo.new(0.32, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {Scale = 1}):Play()
+                TweenService:Create(scale, _khGlass.SETTLE, {Scale = 1}):Play()
             end
         end)
+    end
+
+    -- Arrastre (slider): se queda levantada mientras la sostienes y se asienta al soltar.
+    function _khGlass.Lift(inst, on)
+        if not _animEnabled() then return end
+        local scale = getScale(inst, on)
+        if not scale then return end
+        TweenService:Create(scale, on and _khGlass.FAST or _khGlass.SETTLE, {Scale = on and 1.25 or 1}):Play()
     end
 end
 
@@ -1925,6 +1991,409 @@ local function findPlayerByOptionName(name)
     end
     return nil
 end
+
+-- ============================================================================
+-- 🧑‍🤝‍🧑 V5.9.6 · MOTOR COMPARTIDO DE DROPDOWNS (CreateDropdown + CreateMultiDropdown)
+-- ----------------------------------------------------------------------------
+-- Antes los dos widgets duplicaban ~150 líneas y reconstruían TODAS las filas
+-- (destruir + crear ~8 Instances por jugador) cada vez que BindToDynamicList
+-- refrescaba (cada 2 s), aunque la lista no hubiera cambiado. Ahora:
+--   • Las filas se crean SOLO cuando abres el dropdown (cerrado = 0 filas).
+--   • Refresh() compara una firma de la lista: si no cambió, no hace NADA; si
+--     cambió con el dropdown cerrado, solo marca "sucio" y reconstruye al abrir.
+--   • Las filas usan conexiones propias (mueren con la fila) en vez de
+--     acumularse para siempre en la tabla global de Connections.
+--   • Filas de jugador ALINEADAS: avatar a la izquierda en columna fija, nombre
+--     alineado a la izquierda (arriba) y el otro nombre (@usuario / display)
+--     debajo, ✓ a la derecha. Ya no se centran según el largo del nombre.
+--   • Buscador propio para listas de jugadores (o de más de 6 opciones): busca
+--     por nombre de usuario Y display name, sin distinguir mayúsculas y sin
+--     romperse con caracteres como ( % [ (búsqueda en texto plano).
+--   • MultiDropdown: botones "Todos / Nada" (actúan sobre lo que se ve filtrado).
+-- Todo vive en KHS.DD (un solo slot de local en el chunk principal).
+-- ============================================================================
+KHS.DD = {}
+do
+    local DD = KHS.DD
+    local WHITE = Color3.fromRGB(255, 255, 255)
+    local ROW_BG, ROW_BG_ON = Color3.fromRGB(22, 22, 27), Color3.fromRGB(28, 28, 34)
+    local AVATAR_BG = Color3.fromRGB(16, 16, 20)
+    local TWEEN = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local TOP_H, HEADER_H, BOTTOM_PAD, EMPTY_H = 36, 30, 6, 22
+    local GAP, PAD_V = 4, 6
+    local ROW_PLAYER, ROW_GENERIC, AVATAR = 42, 28, 30
+    local MAXH_PLAYER, MAXH_GENERIC = 208, 184 -- 208 = 4 filas y media: se nota que hay scroll
+    local TEXT_LEFT, TEXT_RIGHT = 48, 36
+
+    -- Mapa Name/DisplayName -> Player en UNA pasada (antes era O(opciones × jugadores)
+    -- dos veces por refresco). Name tiene prioridad sobre DisplayName.
+    function DD.playerMap()
+        local map, list = {}, Players:GetPlayers()
+        for i = 1, #list do map[list[i].Name] = list[i] end
+        for i = 1, #list do
+            local dn = list[i].DisplayName
+            if map[dn] == nil then map[dn] = list[i] end
+        end
+        return map
+    end
+
+    -- Firma barata de la lista (incluye el UserId de los que son jugadores, así
+    -- un jugador que entra/sale siempre cambia la firma).
+    function DD.signature(options, map)
+        local parts = {}
+        for i = 1, #options do
+            local n = options[i]
+            local p = map[n]
+            parts[i] = p and (tostring(n) .. "\2" .. p.UserId) or tostring(n)
+        end
+        return table.concat(parts, "\1")
+    end
+
+    local function getFont()
+        local ok, f = pcall(function() return Enum.Font[Config.SelectedFont or "GothamMedium"] end)
+        return (ok and f) or Enum.Font.GothamMedium
+    end
+
+    -- o = {flagName, text, multi, options, selText, selSize, isChosen(name),
+    --      onPick(name), onBulk(names, state) [multi], onOptions(newOptions)}
+    function DD.new(tab, o)
+        local flagName, multi = o.flagName, o.multi and true or false
+        local options = o.options
+        local rows = {}
+        local open, dirty, hasHeader, isPlayerList = false, true, false, false
+        local rowH, maxH, shown = ROW_GENERIC, MAXH_GENERIC, 0
+        local lastSig, boundQuery, bindToken
+        local Scroll, Empty, H, tF, tS
+        local ctl = {}
+
+        local Frame = create("Frame", {Name = flagName, Size = UDim2.new(1, 0, 0, TOP_H), BackgroundColor3 = CurrentTheme.BG_SECONDARY, BackgroundTransparency = 0.4, ClipsDescendants = true}, tab.Frame)
+        Frame:SetAttribute("ThemeRole", "BG_SECONDARY") Frame:SetAttribute("CustomColorLabel", true)
+        create("UICorner", {CornerRadius = UDim.new(0, 10)}, Frame)
+        create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, Frame)
+        local Trigger = create("TextButton", {Size = UDim2.new(1, 0, 0, TOP_H), BackgroundTransparency = 1, Text = ""}, Frame)
+        local Label = create("TextLabel", {Size = UDim2.new(0.5, -12, 1, 0), Position = UDim2.new(0, 12, 0, 0), BackgroundTransparency = 1, Text = o.text, TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left}, Trigger)
+        local SelLabel = create("TextLabel", {Size = UDim2.new(0.5, -38, 1, 0), Position = UDim2.new(1, -38, 0, 0), AnchorPoint = Vector2.new(1, 0), BackgroundTransparency = 1, Text = o.selText or "", TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = o.selSize or 11, TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd}, Trigger)
+        SelLabel:SetAttribute("ThemeRole", "TEXT_ACCENT")
+        local Arrow = create("TextLabel", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -22, 0.5, -10), BackgroundTransparency = 1, Text = "▼", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 11}, Trigger)
+
+        ctl.Frame, ctl.Trigger, ctl.Label, ctl.SelLabel = Frame, Trigger, Label, SelLabel
+
+        -- ── layout ─────────────────────────────────────────────────────────
+        local function cancelTweens()
+            if tF then tF:Cancel() tF = nil end
+            if tS then tS:Cancel() tS = nil end
+        end
+
+        -- Alturas calculadas con aritmética (todas las filas de una lista miden
+        -- lo mismo): no dependemos de AbsoluteContentSize, que se actualiza un
+        -- frame tarde.
+        local function applyLayout(animate)
+            if not Scroll then return end
+            local contentH = (shown > 0) and (shown * rowH + (shown - 1) * GAP + PAD_V) or 0
+            local listH = (shown > 0) and math.min(contentH, maxH) or 0
+            local hh = hasHeader and HEADER_H or 0
+            local totalH = TOP_H + hh + ((shown > 0) and listH or EMPTY_H) + BOTTOM_PAD
+            Scroll.Position = UDim2.new(0, 8, 0, TOP_H + hh)
+            Empty.Position = Scroll.Position
+            Scroll.CanvasSize = UDim2.new(0, 0, 0, contentH)
+            Empty.Visible = open and shown == 0
+            if H then H.Frame.Visible = open and hasHeader end
+            if not open then return totalH end
+            cancelTweens()
+            local fs, ss = UDim2.new(1, 0, 0, totalH), UDim2.new(1, -16, 0, listH)
+            if animate then
+                tF = TweenService:Create(Frame, TWEEN, {Size = fs}) tF:Play()
+                tS = TweenService:Create(Scroll, TWEEN, {Size = ss}) tS:Play()
+            else
+                Frame.Size = fs
+                Scroll.Size = ss
+            end
+            return totalH
+        end
+
+        local function applyFilter()
+            local raw = (H and hasHeader) and H.Box.Text or ""
+            local f = string.lower(raw)
+            f = string.match(f, "^%s*(.-)%s*$") or f
+            local n = 0
+            for i = 1, #rows do
+                local r = rows[i]
+                local vis = (f == "") or (string.find(r.key, f, 1, true) ~= nil)
+                r.vis = vis
+                if r.Btn.Visible ~= vis then r.Btn.Visible = vis end
+                if vis then n = n + 1 end
+            end
+            shown = n
+            if H then H.Clear.Visible = (raw ~= "") end
+            if Empty then Empty.Text = (f ~= "") and "Sin resultados" or "Sin opciones" end
+        end
+
+        -- ── filas ──────────────────────────────────────────────────────────
+        local function paintRow(r, selected)
+            local base = selected and ROW_BG_ON or ROW_BG
+            r.base = base
+            r.Btn.BackgroundColor3 = base
+            r.Label:SetAttribute("ThemeText", selected and "ACCENT" or "TEXT_WHITE")
+            r.Label.TextColor3 = selected and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
+            if r.Check then
+                r.Check.TextColor3 = CurrentTheme.ACCENT
+                r.Check.Visible = selected
+            end
+            if selected then
+                -- Los UIStroke de "seleccionado" se crean/destruyen a demanda: las
+                -- filas sin seleccionar no llevan ninguno (menos trabajo de render).
+                if not r.Stroke then
+                    r.Stroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 0.45}, r.Btn)
+                end
+                if r.Avatar and not r.Ring then
+                    r.Ring = create("UIStroke", {Thickness = 1.5, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 0.2}, r.Avatar)
+                end
+            else
+                if r.Stroke then r.Stroke:Destroy() r.Stroke = nil end
+                if r.Ring then r.Ring:Destroy() r.Ring = nil end
+            end
+        end
+
+        local function buildRow(i, name, player, font)
+            local nameStr = tostring(name)
+            local r = {name = name}
+            local Btn
+            if isPlayerList then
+                Btn = create("TextButton", {Size = UDim2.new(1, 0, 0, rowH), BackgroundColor3 = ROW_BG, Text = "", AutoButtonColor = false, LayoutOrder = i}, Scroll)
+                create("UICorner", {CornerRadius = UDim.new(0, 8)}, Btn)
+                local Avatar = create("ImageLabel", {
+                    Size = UDim2.new(0, AVATAR, 0, AVATAR), Position = UDim2.new(0, 8, 0.5, -AVATAR / 2),
+                    BackgroundColor3 = AVATAR_BG, BorderSizePixel = 0,
+                    Image = player and string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=48&h=48", player.UserId) or ""
+                }, Btn)
+                create("UICorner", {CornerRadius = UDim.new(1, 0)}, Avatar)
+                if not player then
+                    -- Opción que no es un jugador (p.ej. "Todos"): monograma, así el
+                    -- texto queda alineado con el resto de filas.
+                    local ch = "?"
+                    pcall(function() ch = string.upper(string.match(nameStr, utf8.charpattern) or "?") end)
+                    create("TextLabel", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = ch, TextColor3 = CurrentTheme.TEXT_MUTED, Font = font, TextSize = 13}, Avatar)
+                end
+                local sub
+                if player then
+                    if name == player.Name then
+                        if player.DisplayName ~= player.Name then sub = player.DisplayName end
+                    else
+                        sub = "@" .. player.Name
+                    end
+                    if player == LocalPlayer then sub = sub and (sub .. " · tú") or "tú" end
+                end
+                local textW = -(TEXT_LEFT + TEXT_RIGHT)
+                r.Label = create("TextLabel", {
+                    Size = sub and UDim2.new(1, textW, 0, 17) or UDim2.new(1, textW, 1, 0),
+                    Position = sub and UDim2.new(0, TEXT_LEFT, 0, 5) or UDim2.new(0, TEXT_LEFT, 0, 0),
+                    BackgroundTransparency = 1, Text = nameStr, TextColor3 = CurrentTheme.TEXT_WHITE, Font = font, TextSize = 12.5,
+                    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
+                    TextTruncate = Enum.TextTruncate.AtEnd
+                }, Btn)
+                if sub then
+                    create("TextLabel", {
+                        Size = UDim2.new(1, textW, 0, 13), Position = UDim2.new(0, TEXT_LEFT, 0, 22),
+                        BackgroundTransparency = 1, Text = sub, TextColor3 = CurrentTheme.TEXT_MUTED, Font = font, TextSize = 10,
+                        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
+                        TextTruncate = Enum.TextTruncate.AtEnd
+                    }, Btn)
+                end
+                r.Check = create("TextLabel", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -28, 0.5, -10), BackgroundTransparency = 1, Text = "✓", TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = 14, Visible = false}, Btn)
+                r.Avatar = Avatar
+                r.key = player and string.lower(nameStr .. " " .. player.Name .. " " .. player.DisplayName) or string.lower(nameStr)
+            else
+                Btn = create("TextButton", {
+                    Size = UDim2.new(1, 0, 0, rowH), BackgroundColor3 = ROW_BG, Text = nameStr, TextColor3 = CurrentTheme.TEXT_WHITE,
+                    TextXAlignment = Enum.TextXAlignment.Center, Font = font, TextSize = 11, AutoButtonColor = false, LayoutOrder = i
+                }, Scroll)
+                create("UICorner", {CornerRadius = UDim.new(0, 8)}, Btn)
+                r.Label = Btn
+                r.key = string.lower(nameStr)
+            end
+            Btn:SetAttribute("ThemeBG", nil) -- el color lo maneja la fila (seleccionada / normal)
+            r.Btn = Btn
+            r.base = ROW_BG
+            r.vis = true
+            -- Conexiones de la fila: mueren con la fila (no van a la tabla global).
+            Btn.MouseEnter:Connect(function() Btn.BackgroundColor3 = r.base:Lerp(WHITE, 0.08) end)
+            Btn.MouseLeave:Connect(function() Btn.BackgroundColor3 = r.base end)
+            Btn.MouseButton1Click:Connect(function()
+                playUISound()
+                o.onPick(r.name)
+            end)
+            return r
+        end
+
+        local function ensureList()
+            if Scroll then return end
+            Scroll = create("ScrollingFrame", {Name = "Options", Size = UDim2.new(1, -16, 0, 0), Position = UDim2.new(0, 8, 0, TOP_H), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2, CanvasSize = UDim2.new(0, 0, 0, 0), ScrollingDirection = Enum.ScrollingDirection.Y}, Frame)
+            create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, GAP)}, Scroll)
+            -- Aire para que el UIStroke de la fila seleccionada no se recorte contra
+            -- el ScrollingFrame / ClipsDescendants (izq, der, arriba y abajo).
+            create("UIPadding", {PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 5), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3)}, Scroll)
+            Empty = create("TextLabel", {Name = "Empty", Size = UDim2.new(1, -16, 0, EMPTY_H), Position = UDim2.new(0, 8, 0, TOP_H), BackgroundTransparency = 1, Text = "Sin resultados", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamMedium, TextSize = 11, Visible = false}, Frame)
+        end
+
+        local function ensureHeader()
+            if H then return end
+            local Frm = create("Frame", {Name = "Header", Size = UDim2.new(1, -16, 0, 26), Position = UDim2.new(0, 8, 0, TOP_H + 2), BackgroundTransparency = 1, Visible = false}, Frame)
+            local rightPad = multi and 100 or 0
+            local Box = create("TextBox", {
+                Size = UDim2.new(1, -rightPad, 1, 0), BackgroundColor3 = ROW_BG, Text = "", PlaceholderText = "Filter options...",
+                PlaceholderColor3 = CurrentTheme.TEXT_MUTED, TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium,
+                TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false
+            }, Frm)
+            create("UICorner", {CornerRadius = UDim.new(1, 0)}, Box) -- píldora estilo iOS
+            create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, Box)
+            create("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 24)}, Box)
+            -- La "✕" va en el Header (no dentro del TextBox): el UIPadding del TextBox
+            -- también desplazaría a sus hijos.
+            local Clear = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -rightPad - 22, 0.5, -10), BackgroundTransparency = 1, Text = "✕", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 10, AutoButtonColor = false, Visible = false}, Frm)
+            H = {Frame = Frm, Box = Box, Clear = Clear}
+            connect(Box:GetPropertyChangedSignal("Text"), function()
+                applyFilter()
+                if Scroll then Scroll.CanvasPosition = Vector2.new(0, 0) end
+                if open then applyLayout(false) end
+            end)
+            connect(Clear.MouseButton1Click, function() Box.Text = "" end)
+            if multi then
+                local function pill(txt, xOff, col)
+                    local b = create("TextButton", {Size = UDim2.new(0, 46, 1, 0), Position = UDim2.new(1, xOff, 0, 0), BackgroundColor3 = ROW_BG, Text = txt, TextColor3 = col, Font = Enum.Font.GothamBold, TextSize = 10, AutoButtonColor = false}, Frm)
+                    create("UICorner", {CornerRadius = UDim.new(1, 0)}, b)
+                    return b
+                end
+                H.All = pill("Todos", -96, CurrentTheme.ACCENT)
+                H.None = pill("Nada", -46, CurrentTheme.TEXT_MUTED)
+                local function bulk(state)
+                    playUISound()
+                    local names = {}
+                    for i = 1, #rows do if rows[i].vis then names[#names + 1] = rows[i].name end end
+                    if o.onBulk then o.onBulk(names, state) end
+                end
+                connect(H.All.MouseButton1Click, function() bulk(true) end)
+                connect(H.None.MouseButton1Click, function() bulk(false) end)
+            end
+        end
+
+        local function rebuild(map)
+            map = map or DD.playerMap()
+            dirty = false
+            ensureList()
+            for i = 1, #rows do rows[i].Btn:Destroy() end
+            table.clear(rows)
+            isPlayerList = false
+            for i = 1, #options do
+                if map[options[i]] then isPlayerList = true break end
+            end
+            rowH = isPlayerList and ROW_PLAYER or ROW_GENERIC
+            maxH = isPlayerList and MAXH_PLAYER or MAXH_GENERIC
+            hasHeader = isPlayerList or #options > 6
+            if hasHeader then ensureHeader() end
+            if H then H.Box.PlaceholderText = isPlayerList and "Buscar jugador..." or "Filter options..." end
+            local font = getFont()
+            for i = 1, #options do
+                local r = buildRow(i, options[i], map[options[i]], font)
+                rows[i] = r
+                paintRow(r, o.isChosen(options[i]) and true or false)
+            end
+            applyFilter()
+        end
+
+        -- ── API del motor ──────────────────────────────────────────────────
+        function ctl.SetLabel(text) SelLabel.Text = text end
+
+        function ctl.Repaint()
+            if dirty then return end -- las filas se pintan solas al reconstruirse
+            for i = 1, #rows do paintRow(rows[i], o.isChosen(rows[i].name) and true or false) end
+        end
+
+        function ctl.SetOpen(v, animate)
+            v = v and true or false
+            if v == open then return end
+            if v then
+                -- Lista dinámica: al abrir se pide una lista fresca (si no cambió, no cuesta nada).
+                if boundQuery then
+                    local ok, list = pcall(boundQuery)
+                    if ok and type(list) == "table" then ctl.Refresh(list) end
+                end
+                open = true
+                if dirty or not Scroll then rebuild() end
+                local totalH = applyLayout(animate)
+                local grow = (totalH or Frame.AbsoluteSize.Y) - Frame.AbsoluteSize.Y
+                scrollWidgetIntoView(tab.Frame, Frame, grow)
+            else
+                open = false
+                cancelTweens()
+                if H then H.Box.Text = "" H.Frame.Visible = false end
+                if Empty then Empty.Visible = false end
+                tF = TweenService:Create(Frame, TWEEN, {Size = UDim2.new(1, 0, 0, TOP_H)}) tF:Play()
+                if Scroll then
+                    tS = TweenService:Create(Scroll, TWEEN, {Size = UDim2.new(1, -16, 0, 0)}) tS:Play()
+                end
+            end
+            TweenService:Create(Arrow, TWEEN, {Rotation = v and 180 or 0}):Play()
+        end
+
+        -- Devuelve true si la lista cambió de verdad.
+        function ctl.Refresh(newOptions)
+            if type(newOptions) ~= "table" then return false end
+            local map = DD.playerMap()
+            local sig = DD.signature(newOptions, map)
+            if sig == lastSig then
+                options = newOptions
+                return false
+            end
+            lastSig = sig
+            options = newOptions
+            if o.onOptions then o.onOptions(newOptions) end
+            dirty = true
+            if open then
+                rebuild(map)
+                applyLayout(false)
+            end
+            return true
+        end
+
+        function ctl.Retheme()
+            Label.TextColor3 = CurrentTheme.TEXT_WHITE
+            Arrow.TextColor3 = CurrentTheme.TEXT_MUTED
+            if H then
+                H.Box.PlaceholderColor3 = CurrentTheme.TEXT_MUTED
+                H.Box.TextColor3 = CurrentTheme.TEXT_WHITE
+            end
+            dirty = true -- las filas se rehacen con los colores del tema nuevo
+            if open then
+                rebuild()
+                applyLayout(false)
+            end
+        end
+
+        function ctl.Bind(queryFunction, interval)
+            boundQuery = queryFunction
+            interval = math.max(tonumber(interval) or 2.0, 0.25)
+            bindToken = (bindToken or 0) + 1 -- si se llama dos veces, el bucle viejo se apaga solo
+            local myToken = bindToken
+            task.spawn(function()
+                while task.wait(interval) do
+                    if myToken ~= bindToken then break end
+                    if not ScreenGui or not ScreenGui.Parent then break end
+                    local ok, list = pcall(queryFunction)
+                    if ok and type(list) == "table" then ctl.Refresh(list) end
+                end
+            end)
+        end
+
+        connect(Trigger.MouseButton1Click, function()
+            playUISound()
+            ctl.SetOpen(not open, true)
+        end)
+
+        lastSig = DD.signature(options, DD.playerMap())
+        return ctl
+    end
+end
+
 
 -- ============================================================================
 -- 📦 API CORE Y MOTOR REACTIVO (ATRIBUTOS DE ARQUITECTURA)
@@ -3174,20 +3643,30 @@ function TabMethods:CreateToggle(flagName, text, callback, default)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, Knob)
     _khGlass.Sheen(Knob, 120) -- 💧 la bolita también es "de vidrio"
 
-    local function stateUpdate()
+    -- ⚡ V5.9.6: stateUpdate(true) = pintado INSTANTÁNEO (al crear el toggle y al
+    -- cambiar de tema). Antes cada toggle lanzaba 3 tweens + brillo + rebote al
+    -- construir el hub (con 50+ toggles era un pico de trabajo al abrir). Con
+    -- "UI optimization" (UiLite) tampoco se anima nada.
+    local function stateUpdate(instant)
         local active = Flags[flagName].CurrentValue
+        local trackColor = active and CurrentTheme.ACCENT or Color3.fromRGB(38, 38, 44)
+        local glowColor = CurrentTheme.GLOW or CurrentTheme.ACCENT
+        local knobPos = active and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
         ToggleLabel.TextColor3 = active and CurrentTheme.TEXT_WHITE or CurrentTheme.TEXT_MUTED
-        TweenService:Create(Track, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            BackgroundColor3 = active and CurrentTheme.ACCENT or Color3.fromRGB(38, 38, 44)
-        }):Play()
+        if instant == true or not _animEnabled() then
+            Track.BackgroundColor3 = trackColor
+            TrackGlow.Color = glowColor
+            TrackGlow.Transparency = active and 0.35 or 1
+            Knob.Position = knobPos
+            return
+        end
+        TweenService:Create(Track, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3 = trackColor}):Play()
         TweenService:Create(TrackGlow, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Transparency = active and 0.35 or 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT
+            Transparency = active and 0.35 or 1, Color = glowColor
         }):Play()
-        TweenService:Create(Knob, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Position = active and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
-        }):Play()
+        TweenService:Create(Knob, _khGlass.SPRING, {Position = knobPos}):Play() -- 🍎 resorte estilo iOS
         _khGlass.Shine(Track) -- 💧 barrido de brillo al togglear
-        _khGlass.Squish(Knob) -- 💧 rebote líquido de la bolita
+        _khGlass.Squish(Knob) -- 💧 la bolita se levanta y se asienta
     end
     
     local function executeSet(bool)
@@ -3201,8 +3680,8 @@ function TabMethods:CreateToggle(flagName, text, callback, default)
         executeSet(not Flags[flagName].CurrentValue)
     end)
     
-    table.insert(KillerHub.TargetThemeElements, stateUpdate)
-    task.spawn(function() stateUpdate() safeCall("callback", callback, Flags[flagName].CurrentValue) end)
+    table.insert(KillerHub.TargetThemeElements, function() stateUpdate(true) end)
+    task.spawn(function() stateUpdate(true) safeCall("callback", callback, Flags[flagName].CurrentValue) end)
 
     addInteractiveFeedback(ToggleButton)
     self:RegisterElement(ToggleButton, ToggleLabel, self.Frame.Name)
@@ -3338,10 +3817,10 @@ function TabMethods:CreateToggleSlider(flagToggle, flagSlider, text, min, max, c
         ToggleLabel.TextColor3 = active and CurrentTheme.TEXT_WHITE or CurrentTheme.TEXT_MUTED
         local trackColor = active and CurrentTheme.ACCENT or TRACK_OFF
         local knobPos = active and KNOB_ON or KNOB_OFF
-        if animate then
+        if animate and _animEnabled() then
             TweenService:Create(Track, TOGGLE_TWEEN, {BackgroundColor3 = trackColor}):Play()
             TweenService:Create(TrackGlow, TOGGLE_TWEEN, {Transparency = active and 0.35 or 1}):Play()
-            TweenService:Create(Knob, TOGGLE_TWEEN, {Position = knobPos}):Play()
+            TweenService:Create(Knob, _khGlass.SPRING, {Position = knobPos}):Play() -- 🍎 resorte estilo iOS
             _khGlass.Shine(Track) -- 💧 barrido de brillo (solo en cambios animados reales)
             _khGlass.Squish(Knob)
         else
@@ -3415,6 +3894,7 @@ function TabMethods:CreateToggleSlider(flagToggle, flagSlider, text, min, max, c
         if endConn then endConn:Disconnect() endConn = nil end
         saveConfig()
         _khGlass.Shine(SFill) -- 💧 brillo al soltar
+        _khGlass.Lift(SKnob, false) -- 🍎 la bolita se asienta
     end
 
     -- ✋ El arrastre SOLO se inicia tocando la bolita (knob). Tocar el track no
@@ -3424,7 +3904,7 @@ function TabMethods:CreateToggleSlider(flagToggle, flagSlider, text, min, max, c
         if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
         sliding = true
         activeInput = input
-        _khGlass.Squish(SKnob) -- 💧 rebote líquido al agarrar la bolita
+        _khGlass.Lift(SKnob, true) -- 🍎 la bolita se levanta mientras la sostienes
         _khGlass.Shine(SFill) -- 💧 brillo al empezar a mover
         dragConn = UserInputService.InputChanged:Connect(function(changedInput)
             if not sliding then return end
@@ -3583,6 +4063,7 @@ function TabMethods:CreateSlider(flagName, text, min, max, callback, default)
         if endConn then endConn:Disconnect() endConn = nil end
         saveConfig()
         _khGlass.Shine(Fill) -- 💧 brillo al soltar
+        _khGlass.Lift(Knob, false) -- 🍎 la bolita se asienta
     end
 
     -- ✋ El arrastre SOLO se inicia tocando la bolita (knob). Tocar el track no
@@ -3592,7 +4073,7 @@ function TabMethods:CreateSlider(flagName, text, min, max, callback, default)
         if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
         sliding = true
         activeInput = input
-        _khGlass.Squish(Knob) -- 💧 rebote líquido al agarrar la bolita
+        _khGlass.Lift(Knob, true) -- 🍎 la bolita se levanta mientras la sostienes
         _khGlass.Shine(Fill) -- 💧 brillo al empezar a mover
         dragConn = UserInputService.InputChanged:Connect(function(changedInput)
             if not sliding then return end
@@ -3682,194 +4163,60 @@ function TabMethods:CreateDropdown(flagName, text, options, callback, default)
         saveConfig()
     end
     updateGlobalFlags(flagName, Config[flagName])
-    
-    local DDFrame = create("Frame", {Name = flagName, Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = CurrentTheme.BG_SECONDARY, BackgroundTransparency = 0.4, ClipsDescendants = true}, self.Frame)
-    DDFrame:SetAttribute("ThemeRole", "BG_SECONDARY") DDFrame:SetAttribute("CustomColorLabel", true)
-    create("UICorner", {CornerRadius = UDim.new(0, 10)}, DDFrame)
-    local Stroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, DDFrame)
-    local Trigger = create("TextButton", {Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, Text = ""}, DDFrame)
-    
-    local Label = create("TextLabel", {Size = UDim2.new(0.5, -12, 1, 0), Position = UDim2.new(0, 12, 0, 0), BackgroundTransparency = 1, Text = text, TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left}, Trigger)
-    local SelLabel = create("TextLabel", {Size = UDim2.new(0.5, -38, 1, 0), Position = UDim2.new(1, -38, 0, 0), AnchorPoint = Vector2.new(1, 0), BackgroundTransparency = 1, Text = Flags[flagName].CurrentValue, TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd}, Trigger)
-    SelLabel:SetAttribute("ThemeRole", "TEXT_ACCENT")
-    local Arrow = create("TextLabel", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -22, 0.5, -10), BackgroundTransparency = 1, Text = "▼", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 11}, Trigger)
-    
-    local hasSearch = #options > 6
-    local searchHeight = hasSearch and 30 or 0
-    local SearchBox
-    
-    if hasSearch then
-        SearchBox = create("TextBox", {Size = UDim2.new(1, -16, 0, 24), Position = UDim2.new(0, 8, 0, 36), BackgroundColor3 = Color3.fromRGB(22, 22, 27), Text = "", PlaceholderText = "Filter options...", PlaceholderColor3 = CurrentTheme.TEXT_MUTED, TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 11, ClearTextOnFocus = false, Visible = false}, DDFrame)
-        create("UICorner", {CornerRadius = UDim.new(0, 7)}, SearchBox)
-        create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, SearchBox)
-    end
-    
-    local OptsScroll = create("ScrollingFrame", {Size = UDim2.new(1, -16, 0, 0), Position = UDim2.new(0, 8, 0, 36 + searchHeight), BackgroundTransparency = 1, ScrollBarThickness = 2}, DDFrame)
-    local layout = create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4)}, OptsScroll)
-    -- 🩹 Fix premium: da respiración extra a la izq/der para que el UIStroke del
-    -- item seleccionado (que se dibuja centrado sobre el borde) nunca choque con
-    -- el ClipsDescendants del DDFrame y se vea "cortado" del lado izquierdo.
-    -- 🩹 V5.3.4: también arriba/abajo, si no el UIStroke de la PRIMERA y la
-    -- ÚLTIMA opción se recorta contra el borde del ScrollingFrame.
-    create("UIPadding", {PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 5), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3)}, OptsScroll)
-    local LIST_PAD_V = 6 -- 3 arriba + 3 abajo
 
-    local open = false
-    
-    local function setDropdownOpen(shouldOpen)
-        open = shouldOpen
-        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 184) or 0
-        if SearchBox then SearchBox.Visible = open if not open then SearchBox.Text = "" end end
-        
-        TweenService:Create(DDFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36 + targetH + searchHeight + (open and 6 or 0))}):Play()
-        TweenService:Create(OptsScroll, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
-        TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
-        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
-
-        if open then
-            local growBy = (36 + targetH + searchHeight + 6) - DDFrame.AbsoluteSize.Y
-            scrollWidgetIntoView(self.Frame, DDFrame, growBy)
-        end
-    end
-
-    connect(Trigger.MouseButton1Click, function()
-        playUISound()
-        setDropdownOpen(not open)
-    end)
-    
-    local function selectOption(name)
-        updateGlobalFlags(flagName, name) Config[flagName] = name saveConfig() SelLabel.Text = name open = false
-        if SearchBox then SearchBox.Text = "" SearchBox.Visible = false end
-        TweenService:Create(DDFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36)}):Play()
-        TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = 0}):Play()
-        safeCall("callback", callback, name)
-    end
-
-    local PLAYER_ROW_H, GENERIC_ROW_H, AVATAR_SIZE = 42, 28, 32
-    local function makeOptions()
-        for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
-        -- 🧑‍🤝‍🧑 Se detecta UNA sola vez por refresco (no por fila): si esta
-        -- lista tiene al menos un jugador conectado entre sus opciones, TODA
-        -- la lista usa el tamaño grande (para que se aprecie el avatar). Si es
-        -- una lista genérica (armas, modos, lo que sea), se queda compacta.
-        local isPlayerList = false
-        for _, o in ipairs(options) do
-            if findPlayerByOptionName(o) then isPlayerList = true break end
-        end
-        local rowH = isPlayerList and PLAYER_ROW_H or GENERIC_ROW_H
-        local textSz = isPlayerList and 12.5 or 11
-        for i, name in ipairs(options) do
-            local selected = (name == Flags[flagName].CurrentValue)
-            local player = isPlayerList and findPlayerByOptionName(name) or nil
-            local txtColor = selected and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
-            local OptBtn = create("TextButton", {
-                Size = UDim2.new(1, 0, 0, rowH),
-                BackgroundColor3 = selected and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
-                Text = player and "" or name, -- con avatar, el nombre va en su propio grupo centrado (ver abajo)
-                TextColor3 = txtColor, TextXAlignment = Enum.TextXAlignment.Center,
-                Font = Enum.Font.GothamMedium, TextSize = textSz, LayoutOrder = i
-            }, OptsScroll)
-            create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
-            if selected then
-                create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 0.45}, OptBtn)
-            end
-
-            if player then
-                -- 🎯 Grupo "avatar + nombre" con AutomaticSize: se centra como
-                -- una unidad en medio de la fila (antes el avatar quedaba
-                -- pegado a la esquina izquierda). Nada de esto corre por
-                -- frame — se arma una sola vez al abrir/filtrar la lista.
-                local group = create("Frame", {
-                    BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.X,
-                    Size = UDim2.new(0, 0, 0, AVATAR_SIZE),
-                    AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0)
-                }, OptBtn)
-                create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, group)
-                local avatar = create("ImageLabel", {
-                    Size = UDim2.new(0, AVATAR_SIZE, 0, AVATAR_SIZE),
-                    BackgroundColor3 = Color3.fromRGB(16, 16, 20), LayoutOrder = 1,
-                    Image = string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=48&h=48", player.UserId)
-                }, group)
-                create("UICorner", {CornerRadius = UDim.new(1, 0)}, avatar)
-                create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER, Transparency = 0.25}, avatar)
-                create("TextLabel", {
-                    Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X, LayoutOrder = 2,
-                    BackgroundTransparency = 1, Text = name, TextColor3 = txtColor,
-                    Font = Enum.Font.GothamMedium, TextSize = textSz,
-                    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center
-                }, group)
-            end
-            
-            connect(OptBtn.MouseButton1Click, function()
-                playUISound()
-                selectOption(name)
-                makeOptions()
-            end)
-            addInteractiveFeedback(OptBtn)
-        end
-        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
-    end
-
-    if SearchBox then
-        connect(SearchBox:GetPropertyChangedSignal("Text"), function()
-            local filter = string.lower(SearchBox.Text)
-            for _, child in ipairs(OptsScroll:GetChildren()) do
-                if child:IsA("TextButton") then child.Visible = (filter == "") or string.find(string.lower(child.Text), filter) and true or false end
-            end
-            task.defer(function()
-                if not open then return end
-                local targetH = math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 184)
-                DDFrame.Size = UDim2.new(1, 0, 0, 36 + targetH + searchHeight + 6)
-                OptsScroll.Size = UDim2.new(1, -16, 0, targetH)
-                OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
-            end)
-        end)
-    end
-
-    table.insert(KillerHub.TargetThemeElements, function()
-        Label.TextColor3 = CurrentTheme.TEXT_WHITE
-        Arrow.TextColor3 = CurrentTheme.TEXT_MUTED
-        if SearchBox then SearchBox.PlaceholderColor3 = CurrentTheme.TEXT_MUTED SearchBox.TextColor3 = CurrentTheme.TEXT_WHITE end
-        makeOptions()
-    end)
-
-    makeOptions()
-    task.spawn(function() if Flags[flagName].CurrentValue ~= "" then safeCall("callback", callback, Flags[flagName].CurrentValue) end end)
-
-    addInteractiveFeedback(Trigger)
-    self:RegisterElement(DDFrame, Label, self.Frame.Name)
-    
-    local ddObj = {
-        Refresh = function(_, newOptions)
+    -- 🧑‍🤝‍🧑 V5.9.6: la UI (filas, avatares, buscador, alturas) vive en KHS.DD.
+    local dd
+    dd = KHS.DD.new(self, {
+        flagName = flagName, text = text, multi = false, options = options,
+        selText = Flags[flagName].CurrentValue, selSize = 11,
+        isChosen = function(name) return name == Flags[flagName].CurrentValue end,
+        onPick = function(name)
+            updateGlobalFlags(flagName, name) Config[flagName] = name saveConfig()
+            dd.SetLabel(name)
+            dd.Repaint()
+            dd.SetOpen(false, true)
+            safeCall("callback", callback, name)
+        end,
+        onOptions = function(newOptions)
             options = newOptions
-            hasSearch = #options > 6
-            searchHeight = hasSearch and 30 or 0
-            if SearchBox then SearchBox.Visible = open and hasSearch end
             -- Same stale-option guard on dynamic refreshes
             if not optionExists(Config[flagName]) then
                 local v = fallbackValue()
                 Config[flagName] = v
                 updateGlobalFlags(flagName, v)
                 saveConfig()
-                SelLabel.Text = v
+                dd.SetLabel(v)
                 if v ~= "" then safeCall("callback", callback, v) end
             end
-            makeOptions()
         end,
-        BindToDynamicList = function(self, queryFunction, refreshInterval)
-            refreshInterval = refreshInterval or 2.0
-            task.spawn(function()
-                while task.wait(refreshInterval) do
-                    if not ScreenGui or not ScreenGui.Parent then break end
-                    local success, newList = pcall(queryFunction)
-                    if success and type(newList) == "table" then
-                        self:Refresh(newList)
-                    end
-                end
-            end)
-        end
+    })
+
+    table.insert(KillerHub.TargetThemeElements, function() dd.Retheme() end)
+
+    task.spawn(function() if Flags[flagName].CurrentValue ~= "" then safeCall("callback", callback, Flags[flagName].CurrentValue) end end)
+
+    addInteractiveFeedback(dd.Trigger)
+    self:RegisterElement(dd.Frame, dd.Label, self.Frame.Name)
+
+    local ddObj = {
+        Refresh = function(_, newOptions) dd.Refresh(newOptions) end,
+        BindToDynamicList = function(_, queryFunction, refreshInterval)
+            dd.Bind(queryFunction, refreshInterval)
+        end,
+        -- ➕ Extras de API (aditivos)
+        Set = function(_, value)
+            if type(value) == "string" and optionExists(value) then
+                updateGlobalFlags(flagName, value) Config[flagName] = value saveConfig()
+                dd.SetLabel(value)
+                dd.Repaint()
+                safeCall("callback", callback, value)
+            end
+        end,
+        Get = function() return Flags[flagName] and Flags[flagName].CurrentValue end,
+        SetVisible = function(_, bool) dd.Frame.Visible = bool and true or false end,
+        Instance = dd.Frame
     }
-    
+
     KillerHub.Elements[flagName] = ddObj
     return ddObj
 end
@@ -3903,139 +4250,73 @@ function TabMethods:CreateMultiDropdown(flagName, text, options, callback, defau
         if changed then saveConfig() end
     end
     updateGlobalFlags(flagName, Config[flagName])
-    
-    local MFrame = create("Frame", {Name = flagName, Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = CurrentTheme.BG_SECONDARY, BackgroundTransparency = 0.4, ClipsDescendants = true}, self.Frame)
-    MFrame:SetAttribute("ThemeRole", "BG_SECONDARY") MFrame:SetAttribute("CustomColorLabel", true)
-    create("UICorner", {CornerRadius = UDim.new(0, 10)}, MFrame)
-    local Stroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, MFrame)
-    local Trigger = create("TextButton", {Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, Text = ""}, MFrame)
-    
-    local Label = create("TextLabel", {Size = UDim2.new(0.5, -12, 1, 0), Position = UDim2.new(0, 12, 0, 0), BackgroundTransparency = 1, Text = text, TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left}, Trigger)
-    local SelLabel = create("TextLabel", {Size = UDim2.new(0.5, -38, 1, 0), Position = UDim2.new(1, -38, 0, 0), AnchorPoint = Vector2.new(1, 0), BackgroundTransparency = 1, Text = "...", TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd}, Trigger)
-    SelLabel:SetAttribute("ThemeRole", "TEXT_ACCENT")
-    local Arrow = create("TextLabel", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -22, 0.5, -10), BackgroundTransparency = 1, Text = "▼", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 11}, Trigger)
-    
-    local OptsScroll = create("ScrollingFrame", {Size = UDim2.new(1, -16, 0, 0), Position = UDim2.new(0, 8, 0, 36), BackgroundTransparency = 1, ScrollBarThickness = 2}, MFrame)
-    local layout = create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4)}, OptsScroll)
-    -- 🩹 Mismo fix que en CreateDropdown: evita que el UIStroke de la opción
-    -- marcada se vea cortado del lado izquierdo contra el ClipsDescendants.
-    create("UIPadding", {PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 5), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3)}, OptsScroll)
-    local LIST_PAD_V = 6
 
+    local md
     local function updateText()
         local selected = {}
         for _, opt in ipairs(options) do if Config[flagName][opt] then table.insert(selected, opt) end end
-        if #selected == 0 then SelLabel.Text = "Ninguno" elseif #selected > 2 then SelLabel.Text = "[" .. tostring(#selected) .. " Seleccionados]" else SelLabel.Text = table.concat(selected, ", ") end
+        local txt
+        if #selected == 0 then txt = "Ninguno" elseif #selected > 2 then txt = "[" .. tostring(#selected) .. " Seleccionados]" else txt = table.concat(selected, ", ") end
+        if md then md.SetLabel(txt) end
+        return txt
     end
 
-    local open = false
-    connect(Trigger.MouseButton1Click, function()
-        open = not open playUISound()
-        local targetH = open and math.min(layout.AbsoluteContentSize.Y + LIST_PAD_V, 184) or 0
-        TweenService:Create(MFrame, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 36 + targetH + (open and 6 or 0))}):Play()
-        TweenService:Create(OptsScroll, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, -16, 0, targetH)}):Play()
-        TweenService:Create(Arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Rotation = open and 180 or 0}):Play()
-        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
-        if open then
-            local growBy = (36 + targetH + 6) - MFrame.AbsoluteSize.Y
-            scrollWidgetIntoView(self.Frame, MFrame, growBy)
-        end
-    end)
-
-    local cacheButtons = {}
-    local PLAYER_ROW_H, GENERIC_ROW_H, AVATAR_SIZE = 42, 28, 32
-    local cacheLabels = {}
-    local function makeList()
-        for _, child in ipairs(OptsScroll:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
-        table.clear(cacheButtons)
-        table.clear(cacheLabels)
-
-        local isPlayerList = false
-        for _, o in ipairs(options) do
-            if findPlayerByOptionName(o) then isPlayerList = true break end
-        end
-        local rowH = isPlayerList and PLAYER_ROW_H or GENERIC_ROW_H
-        local textSz = isPlayerList and 12.5 or 11
-        
-        for i, name in ipairs(options) do
-            local isChosen = Config[flagName][name] or false
-            local player = isPlayerList and findPlayerByOptionName(name) or nil
-            local txtColor = isChosen and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
-            local OptBtn = create("TextButton", {
-                Size = UDim2.new(1, 0, 0, rowH),
-                BackgroundColor3 = isChosen and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27),
-                Text = player and "" or name, TextXAlignment = Enum.TextXAlignment.Center,
-                TextColor3 = txtColor, Font = Enum.Font.GothamMedium, TextSize = textSz, LayoutOrder = i
-            }, OptsScroll)
-            create("UICorner", {CornerRadius = UDim.new(0, 8)}, OptBtn)
-            local OptGlow = create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = isChosen and 0.45 or 1}, OptBtn)
-            cacheButtons[name] = OptBtn
-
-            if player then
-                local group = create("Frame", {
-                    BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.X,
-                    Size = UDim2.new(0, 0, 0, AVATAR_SIZE),
-                    AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0)
-                }, OptBtn)
-                create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, group)
-                local avatar = create("ImageLabel", {
-                    Size = UDim2.new(0, AVATAR_SIZE, 0, AVATAR_SIZE),
-                    BackgroundColor3 = Color3.fromRGB(16, 16, 20), LayoutOrder = 1,
-                    Image = string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=48&h=48", player.UserId)
-                }, group)
-                create("UICorner", {CornerRadius = UDim.new(1, 0)}, avatar)
-                create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER, Transparency = 0.25}, avatar)
-                local nameLabel = create("TextLabel", {
-                    Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X, LayoutOrder = 2,
-                    BackgroundTransparency = 1, Text = name, TextColor3 = txtColor,
-                    Font = Enum.Font.GothamMedium, TextSize = textSz,
-                    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center
-                }, group)
-                cacheLabels[name] = nameLabel
-            end
-            
-            connect(OptBtn.MouseButton1Click, function()
-                local nextState = not Config[flagName][name]
-                Config[flagName][name] = nextState
-                saveConfig() playUISound() updateText()
-                updateGlobalFlags(flagName, Config[flagName])
-                
-                local newColor = nextState and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(22, 22, 27)
-                local newTextColor = nextState and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
-                TweenService:Create(OptBtn, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {
-                    BackgroundColor3 = newColor, TextColor3 = newTextColor
-                }):Play()
-                if cacheLabels[name] then
-                    TweenService:Create(cacheLabels[name], TweenInfo.new(0.1, Enum.EasingStyle.Quad), {TextColor3 = newTextColor}):Play()
+    -- 🧑‍🤝‍🧑 V5.9.6: la UI (filas, avatares, buscador, Todos/Nada) vive en KHS.DD.
+    md = KHS.DD.new(self, {
+        flagName = flagName, text = text, multi = true, options = options,
+        selText = "...", selSize = 10,
+        isChosen = function(name) return Config[flagName][name] and true or false end,
+        onPick = function(name)
+            Config[flagName][name] = not Config[flagName][name]
+            saveConfig() updateText()
+            updateGlobalFlags(flagName, Config[flagName])
+            md.Repaint()
+            safeCall("callback", callback, Config[flagName])
+        end,
+        -- "Todos" / "Nada": actúan solo sobre las filas que se ven (respeta el buscador).
+        onBulk = function(names, state)
+            local changed = false
+            for _, n in ipairs(names) do
+                if (Config[flagName][n] and true or false) ~= state then
+                    Config[flagName][n] = state
+                    changed = true
                 end
-                TweenService:Create(OptGlow, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {
-                    Transparency = nextState and 0.45 or 1
-                }):Play()
-                safeCall("callback", callback, Config[flagName])
-            end)
-            addInteractiveFeedback(OptBtn)
-        end
-        OptsScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + LIST_PAD_V)
-    end
+            end
+            if not changed then return end
+            saveConfig() updateText()
+            updateGlobalFlags(flagName, Config[flagName])
+            md.Repaint()
+            safeCall("callback", callback, Config[flagName])
+        end,
+        onOptions = function(newOptions)
+            options = newOptions
+            updateText()
+        end,
+    })
+    updateText()
 
-    table.insert(KillerHub.TargetThemeElements, function()
-        Label.TextColor3 = CurrentTheme.TEXT_WHITE
-        makeList()
-    end)
+    table.insert(KillerHub.TargetThemeElements, function() md.Retheme() end)
 
-    makeList() updateText()
     task.spawn(pcall, callback, Config[flagName])
-    addInteractiveFeedback(Trigger)
-    self:RegisterElement(MFrame, Label, self.Frame.Name)
-    
+    addInteractiveFeedback(md.Trigger)
+    self:RegisterElement(md.Frame, md.Label, self.Frame.Name)
+
     local mddObj = {
         GetSelected = function()
             local selected = {}
             for opt, val in pairs(Config[flagName]) do if val then table.insert(selected, opt) end end
             return selected
-        end
+        end,
+        -- ➕ Extras de API (aditivos): igual que en CreateDropdown
+        Refresh = function(_, newOptions) md.Refresh(newOptions) end,
+        BindToDynamicList = function(_, queryFunction, refreshInterval)
+            md.Bind(queryFunction, refreshInterval)
+        end,
+        SetVisible = function(_, bool) md.Frame.Visible = bool and true or false end,
+        Instance = md.Frame
     }
     KillerHub.Elements[flagName] = mddObj
+    return mddObj
 end
 
 -- ============================================================================
@@ -4247,7 +4528,7 @@ function TabMethods:CreateInput(flagName, text, placeholder, callback)
             local mathExpression = string.sub(val, 2)
             local safeExpression = string.match(mathExpression, "^[%d%.%+%-%*%/%s%(%)]+$")
             if safeExpression then
-                local loadFunc, err = loadstring("return " .. safeExpression)
+                local loadFunc, err = (type(loadstring) == "function") and loadstring("return " .. safeExpression) or nil
                 if loadFunc then
                     local s, res = pcall(loadFunc)
                     if s and tonumber(res) then
