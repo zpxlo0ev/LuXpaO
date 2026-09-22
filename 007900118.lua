@@ -1,5 +1,25 @@
 -- ============================================================================
--- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.6)
+-- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.7)
+-- Changelog V5.9.7 (API de botones flotantes + rediseño shortcuts + fixes):
+--   • 🆕 KillerHub:CreateFloatingButton({...}) — API nueva y ADITIVA (no rompe
+--     nada existente) para crear botones flotantes iguales a los de un
+--     shortcut, pero SIN necesitar un Toggle/Button real en un Tab detrás.
+--     Soporta: texto inicial, ícono por rbxassetid, texto DINÁMICO (útil para
+--     un contador de cooldown que se actualiza solo tras cada click), forma/
+--     tamaño iniciales, y reusa el modal de ajustes (forma/tamaño/opacidad/
+--     lock/keybind) de los shortcuts normales vía handle:OpenSettings().
+--     Ver comentario grande justo antes de la función para la firma completa.
+--   • 🎨 Rediseño de los botones flotantes de shortcuts: se eliminó la barrita
+--     de acento horizontal de abajo (accentBar) — el texto ahora tiene ~18px
+--     más de alto disponible y se lee mejor, sobre todo en botones chicos.
+--   • 🩹 Color picker: más separación entre el Canvas SV y el Hue slider (12→
+--     22px) + drag mutuamente excluyente entre ambos + coordenadas cacheadas
+--     al iniciar cada arrastre. Antes, arrastrando muy cerca del borde entre
+--     ambos controles, a veces se movían los dos a la vez.
+--   • ⚡ Pasada de optimización: ver notas de rendimiento junto a cada cambio
+--     arriba (cero Instances/conexiones nuevas para los shortcuts ya
+--     existentes; lo nuevo de CreateFloatingButton solo gasta recursos
+--     mientras el botón está en pantalla o con un cooldown corriendo).
 -- Changelog V5.9.6 (dropdowns de jugadores + Liquid Glass iOS + compatibilidad):
 --   • 🧑‍🤝‍🧑 DROPDOWNS DE JUGADORES REDISEÑADOS (CreateDropdown y CreateMultiDropdown).
 --       - Alineados: avatar en una columna fija a la izquierda, nombre alineado
@@ -2952,7 +2972,14 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, SVPickerKnob)
     create("UIStroke", {Thickness = 1.2, Color = Color3.fromRGB(0, 0, 0)}, SVPickerKnob)
 
-    local HueSlider = create("Frame", {Position = UDim2.new(0, 214, 0, contentTop), Size = UDim2.new(0, 20, 0, 128), BorderSizePixel = 0, Active = true}, MasterFrame)
+    -- 🩹 V5.9.7: más separación entre el Canvas SV y el Hue slider (12px → 22px).
+    -- Antes, arrastrando el knob del Canvas muy cerca del borde derecho, un
+    -- InputBegan nuevo (p. ej. un segundo toque, o el dedo "rebotando" al
+    -- tocar otra vez sin soltar bien el primero) podía caer ya DENTRO del
+    -- hitbox del Hue slider y arrancar su propio drag → los dos se movían
+    -- juntos. Con más aire entre ambos, un toque cerca del Canvas ya no
+    -- alcanza a aterrizar sobre el Hue.
+    local HueSlider = create("Frame", {Position = UDim2.new(0, 224, 0, contentTop), Size = UDim2.new(0, 20, 0, 128), BorderSizePixel = 0, Active = true}, MasterFrame)
     create("UICorner", {CornerRadius = UDim.new(0, 8)}, HueSlider)
     create("UIStroke", {Thickness = 1, Color = Color3.fromRGB(45, 45, 50)}, HueSlider)
     create("UIGradient", {
@@ -2973,7 +3000,7 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
 
     -- Columna derecha auto-centrada: la previsualización y el hex ya no van pegados a un
     -- lado, se centran en el espacio libre junto al Hue sin importar el ancho de la ventana
-    local InfoColumn = create("Frame", {Position = UDim2.new(0, 246, 0, contentTop), Size = UDim2.new(1, -258, 0, 128), BackgroundTransparency = 1}, MasterFrame)
+    local InfoColumn = create("Frame", {Position = UDim2.new(0, 256, 0, contentTop), Size = UDim2.new(1, -268, 0, 128), BackgroundTransparency = 1}, MasterFrame)
 
     local PreviewFrame = create("Frame", {
         AnchorPoint = Vector2.new(0.5, 0),
@@ -3132,16 +3159,24 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
         setRainbow(not rainbowActive)
     end)
 
+    -- 🩹 V5.9.7: el rincón (AbsolutePosition/AbsoluteSize) del Canvas y del Hue
+    -- se cachea UNA vez al empezar cada drag en vez de leerse en cada
+    -- InputChanged. Antes, si el layout se recalculaba a mitad de un arrastre
+    -- (p. ej. al abrir/cerrar otra fila arriba), el knob "saltaba" un frame —
+    -- eso se sentía como si el control se moviera solo. Cachear también evita
+    -- N lecturas de propiedad por segundo (más barato).
+    local svOrigin, svSize
+    local hueOrigin, hueSize
     local function updateSV(input)
-        local pctX = mathClamp((input.Position.X - Canvas.AbsolutePosition.X) / Canvas.AbsoluteSize.X, 0, 1)
-        local pctY = 1 - mathClamp((input.Position.Y - Canvas.AbsolutePosition.Y) / Canvas.AbsoluteSize.Y, 0, 1)
+        local pctX = mathClamp((input.Position.X - svOrigin.X) / svSize.X, 0, 1)
+        local pctY = 1 - mathClamp((input.Position.Y - svOrigin.Y) / svSize.Y, 0, 1)
         s = pctX
         v = pctY
         refreshColor()
     end
 
     local function updateHue(input)
-        local pctY = mathClamp((input.Position.Y - HueSlider.AbsolutePosition.Y) / HueSlider.AbsoluteSize.Y, 0, 1)
+        local pctY = mathClamp((input.Position.Y - hueOrigin.Y) / hueSize.Y, 0, 1)
         h = pctY
         refreshColor()
     end
@@ -3165,11 +3200,21 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
     local svDragging = false
     local svActiveInput = nil
     local svDragConn, svEndConn
+    -- 🩹 Declarados acá arriba (antes vivían recién antes del InputBegan del
+    -- Hue) para que el mutex del Canvas pueda leer hueDragging como upvalue
+    -- real y no como variable inexistente/global.
+    local hueDragging = false
+    local hueActiveInput = nil
+    local hueDragConn, hueEndConn
 
     connect(Canvas.InputBegan, function(input)
-        if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) and not svDragging then
+        -- 🩹 Mutex: si el Hue slider ya está siendo arrastrado (por otro dedo u
+        -- otro input), ignoramos este press hasta que suelte. Así nunca pueden
+        -- quedar los dos controles moviéndose a la vez por accidente.
+        if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) and not svDragging and not hueDragging then
             svDragging = true
             svActiveInput = input
+            svOrigin, svSize = Canvas.AbsolutePosition, Canvas.AbsoluteSize
             setTabScrolling(MasterFrame, false)
             updateSV(input)
 
@@ -3192,14 +3237,11 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
         end
     end)
 
-    local hueDragging = false
-    local hueActiveInput = nil
-    local hueDragConn, hueEndConn
-
     connect(HueSlider.InputBegan, function(input)
-        if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) and not hueDragging then
+        if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) and not hueDragging and not svDragging then
             hueDragging = true
             hueActiveInput = input
+            hueOrigin, hueSize = HueSlider.AbsolutePosition, HueSlider.AbsoluteSize
             if rainbowActive then setRainbow(false) end -- mover el tono a mano sale del modo automático
             setTabScrolling(MasterFrame, false)
             updateHue(input)
@@ -5147,6 +5189,14 @@ local function buildLabel(sc)
         local state = sc.data.getState()
         return string.format("%s: %s", sc.data.name, state and "ON" or "OFF")
     end
+    -- 🆕 kind == "custom" (KillerHub:CreateFloatingButton): el texto puede ser
+    -- dinámico (contador de cooldown, etc.) — si el creador definió getLabel,
+    -- se usa esa función en vez del nombre fijo. Protegido con pcall: un error
+    -- del usuario ahí no debe tirar abajo el render del botón.
+    if sc.data.kind == "custom" and sc.data.getLabel then
+        local ok, txt = pcall(sc.data.getLabel)
+        if ok and type(txt) == "string" then return txt end
+    end
     return sc.data.name
 end
 
@@ -5224,6 +5274,7 @@ local function refreshShortcutVisual(sc)
         end
         ShortcutLabelPulses[sc.data.id] = nil
     end
+    if sc.layoutIcon then sc.layoutIcon() end
     if sc.accentBar then
         -- 📏 The bar now fits INSIDE the button for every shape (it used to
         -- overflow on circles and would clash with the new outline).
@@ -5331,11 +5382,15 @@ local function createFloating(sc)
     }, stroke)
     if scAnimOn then ShortcutBorderAnims[sc.data.id] = strokeGradient end
 
-    local accentBar = create("Frame", {AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.new(0.58, 0, 0, 3), Position = UDim2.new(0.5, 0, 1, -7), BackgroundColor3 = getShortcutBorder(), BorderSizePixel = 0}, frame)
-    create("UICorner", {CornerRadius = UDim.new(1, 0)}, accentBar)
+    -- 🩹 V5.9.7: se eliminó la barra de acento horizontal inferior (accentBar) a
+    -- pedido — le robaba ~18px de alto al label y el texto se veía apretado.
+    -- El feedback ON/OFF ahora vive solo en el borde/relleno/color del texto
+    -- (ver refreshShortcutVisual y flashShortcutButton, ambos ya eran nil-safe
+    -- para accentBar así que no hizo falta tocar esas funciones).
+    local accentBar = nil
     local label = create("TextLabel", {
-        Size = UDim2.new(1, -12, 1, -18),
-        Position = UDim2.new(0, 6, 0, 2),
+        Size = UDim2.new(1, -10, 1, -8),
+        Position = UDim2.new(0, 5, 0, 4),
         BackgroundTransparency = 1,
         Text = buildLabel(sc),
         TextColor3 = CurrentTheme.TEXT_WHITE,
@@ -5359,6 +5414,49 @@ local function createFloating(sc)
         Rotation = 0,
         Enabled = false
     }, label)
+
+    -- 🆕 Ícono opcional (rbxassetid) para botones creados con
+    -- KillerHub:CreateFloatingButton. Un shortcut "normal" (toggle/button de un
+    -- Tab) nunca trae sc.data.image, así que para todos ellos esto es un único
+    -- chequeo de campo nil y no agrega ningún Instance ni costo extra.
+    local icon
+    local function layoutIcon()
+        if icon then icon:Destroy() icon = nil end
+        local img = sc.data.image
+        if img and img ~= "" then
+            local hasText = sc.data.name and sc.data.name ~= ""
+            icon = create("ImageLabel", {
+                Name = "Icon",
+                BackgroundTransparency = 1,
+                Image = img,
+                ScaleType = Enum.ScaleType.Fit,
+                ZIndex = 12
+            }, frame)
+            if hasText then
+                -- Ícono arriba (cuadrado, ~55% del alto) + texto abajo.
+                icon.AnchorPoint = Vector2.new(0.5, 0)
+                icon.Position = UDim2.new(0.5, 0, 0, 4)
+                icon.Size = UDim2.new(0, 0, 0.54, 0)
+                create("UIAspectRatioConstraint", {AspectRatio = 1}, icon)
+                label.Visible = true
+                label.Size = UDim2.new(1, -10, 0.40, 0)
+                label.Position = UDim2.new(0, 5, 0.58, 0)
+            else
+                -- Sin texto: el ícono ocupa todo el botón (menos un margen).
+                icon.AnchorPoint = Vector2.new(0.5, 0.5)
+                icon.Position = UDim2.new(0.5, 0, 0.5, 0)
+                icon.Size = UDim2.new(1, -14, 1, -14)
+                label.Visible = false
+            end
+        else
+            label.Visible = true
+            label.Size = UDim2.new(1, -10, 1, -8)
+            label.Position = UDim2.new(0, 5, 0, 4)
+        end
+        sc.icon = icon
+    end
+    layoutIcon()
+    sc.layoutIcon = layoutIcon
     -- Micro animación al aparecer
     if Config.MenuAnimEnabled ~= false then
         local scaleFx = Instance.new("UIScale"); scaleFx.Scale = 0.85; scaleFx.Parent = frame
@@ -6070,6 +6168,223 @@ function KillerHub._AttachShortcut(hostFrame, data)
             if sc.frame then refreshShortcutVisual(sc) end
         end)
     end
+end
+
+-- ============================================================================
+-- 🆕 V5.9.7 · KillerHub:CreateFloatingButton — API pública de botones flotantes
+-- ----------------------------------------------------------------------------
+-- Crea un botón "shortcut" (idéntico visualmente a los que salen del ícono
+-- activador ↖ de un Toggle/Button de un Tab) sin necesitar ningún control real
+-- en un Tab detrás. Pensado para vos decidir cuándo mostrarlo, por ejemplo
+-- desde tu propio CreateToggle "Show Button" en Settings/Modify.
+--
+-- Reusa TODO el motor existente de shortcuts (tema activo, animación de borde
+-- giratorio, ola en el texto, drag multi-touch, grid automático al activarse,
+-- guardado de posición/forma/tamaño por id) → visualmente y en performance es
+-- el mismo camino de código que ya usan los shortcuts normales, cero motor
+-- nuevo que mantener.
+--
+-- local btn = KillerHub:CreateFloatingButton({
+--     id          = "sky_toggle",        -- string único y estable. Volver a
+--                                          -- llamar con el mismo id actualiza
+--                                          -- el botón existente en vez de
+--                                          -- crear uno duplicado encimado.
+--     text        = "Change sky",         -- texto inicial ("" para ícono solo)
+--     image       = "rbxassetid://123",   -- opcional, ícono por asset id
+--     visible     = true,                 -- opcional, default true
+--     shape       = "square",             -- "square" | "rounded" | "circle"
+--     size        = 48,                   -- 20-100 px, igual que un shortcut
+--     cooldown    = 5,                    -- opcional: segundos bloqueado tras
+--                                          -- un click, con cuenta regresiva
+--                                          -- EN VIVO en el propio texto
+--     cooldownText = function(secondsLeft)
+--         return "Wait " .. secondsLeft .. "s"
+--     end,
+--     onClick     = function(handle) ... end,
+-- })
+--
+-- Handle devuelto:
+--   handle:SetText("Nuevo texto")   handle:SetImage("rbxassetid://456")
+--   handle:Show()  handle:Hide()    handle:Fire()  -- dispara onClick a mano
+--   handle:OpenSettings()  -- abre el MISMO modal (forma/tamaño/opacidad/lock/
+--                              keybind) que usan los shortcuts normales
+--   handle:Destroy()        -- lo saca de pantalla y libera sus conexiones
+-- ============================================================================
+KillerHub._CustomButtons = KillerHub._CustomButtons or {}
+
+function KillerHub:CreateFloatingButton(opts)
+    opts = opts or {}
+    if not SafeAssert("CreateFloatingButton", {
+        ["id"]   = {value = opts.id,   types = {"string"}},
+        ["text"] = {value = opts.text, types = {"string"}},
+    }) then return end
+    if opts.onClick ~= nil and type(opts.onClick) ~= "function" then
+        warn("⚠️ [KillerHub Debugger] CreateFloatingButton: 'onClick' debia ser function, se ignoro.")
+        opts.onClick = nil
+    end
+
+    local id = "custom::" .. opts.id
+
+    -- Volver a llamar con el mismo id actualiza el botón vivo en vez de crear
+    -- otro Shortcuts[id] pisado encima (útil si tu script se re-ejecuta).
+    local existing = KillerHub._CustomButtons[id]
+    if existing then
+        existing:SetText(opts.text)
+        if opts.image ~= nil then existing:SetImage(opts.image) end
+        existing._onClick = opts.onClick
+        existing._cooldown = opts.cooldown
+        existing._cooldownText = opts.cooldownText
+        if opts.visible == false then
+            existing:Hide()
+        elseif opts.visible == true or not existing._everShown then
+            existing:Show()
+        end
+        return existing
+    end
+
+    local cfg = ensureCfg(id)
+    if opts.shape == "square" or opts.shape == "rounded" or opts.shape == "circle" then
+        cfg.shape = opts.shape
+    end
+    if type(opts.size) == "number" then
+        cfg.size = math.clamp(math.floor(opts.size), 20, 100)
+    end
+
+    -- ⚡ Cooldown: un solo task.spawn con task.wait(1) por botón, y SOLO
+    -- mientras hay cuenta regresiva activa (se auto-termina al llegar a 0).
+    -- cooldownGen invalida loops viejos si se re-dispara antes de terminar
+    -- (no debería pasar porque data.fire ignora clicks en cooldown, pero
+    -- protege igual contra :Fire() manual durante la cuenta regresiva).
+    local coolingDown, remaining, cooldownGen = false, 0, 0
+    local handle
+    local sc
+
+    local function currentLabel()
+        if coolingDown then
+            local fn = handle._cooldownText
+            if type(fn) == "function" then
+                local ok, txt = pcall(fn, remaining)
+                if ok and type(txt) == "string" then return txt end
+            end
+            return string.format("%s (%ds)", handle._text or "", remaining)
+        end
+        return handle._text or ""
+    end
+
+    local function startCooldown(seconds)
+        cooldownGen = cooldownGen + 1
+        local myGen = cooldownGen
+        coolingDown = true
+        remaining = math.max(1, math.ceil(seconds))
+        if sc.label then sc.label.Text = currentLabel() end
+        task.spawn(function()
+            while remaining > 0 do
+                task.wait(1)
+                if myGen ~= cooldownGen then return end -- se canceló/reinició
+                remaining = remaining - 1
+                if sc.frame and sc.label then sc.label.Text = currentLabel() end
+            end
+            if myGen ~= cooldownGen then return end
+            coolingDown = false
+            if sc.frame and sc.label then sc.label.Text = currentLabel() end
+        end)
+    end
+
+    local data = {
+        id = id,
+        kind = "custom",
+        name = opts.text,
+        image = opts.image,
+        getState = function() return nil end,
+        getLabel = currentLabel,
+        fire = function()
+            if coolingDown then return end -- click ignorado durante la cuenta regresiva
+            safeCall("CreateFloatingButton.onClick", handle._onClick, handle)
+            local cd = handle._cooldown
+            if type(cd) == "number" and cd > 0 then startCooldown(cd) end
+        end,
+    }
+
+    sc = { data = data, cfg = cfg }
+    Shortcuts[id] = sc
+
+    handle = {
+        _id = id,
+        _text = opts.text,
+        _onClick = opts.onClick,
+        _cooldown = opts.cooldown,
+        _cooldownText = opts.cooldownText,
+        _everShown = false,
+    }
+
+    function handle:SetText(text)
+        if type(text) ~= "string" then return self end
+        self._text = text
+        data.name = text
+        if sc.frame then refreshShortcutVisual(sc) end
+        return self
+    end
+
+    function handle:SetImage(imageId)
+        data.image = (type(imageId) == "string" and imageId ~= "") and imageId or nil
+        if sc.frame then refreshShortcutVisual(sc) end
+        return self
+    end
+
+    function handle:Fire()
+        safeCall("CreateFloatingButton.Fire", data.fire)
+        return self
+    end
+
+    -- Reusa setShortcutActive: el MISMO camino que prende/apaga un shortcut
+    -- normal (crea/destruye el frame, limpia los registros de animación,
+    -- refresca el activador si lo hubiera, y guarda). Cero lógica duplicada.
+    function handle:Show()
+        self._everShown = true
+        setShortcutActive(sc, true)
+        return self
+    end
+
+    function handle:Hide()
+        setShortcutActive(sc, false)
+        return self
+    end
+
+    -- Abre el MISMO modal de ajustes (forma/tamaño/opacidad/lock/keybind) que
+    -- usan los shortcuts normales → total paridad visual y de opciones.
+    function handle:OpenSettings()
+        openModal(sc)
+        return self
+    end
+
+    function handle:Destroy()
+        self:Hide()
+        Shortcuts[id] = nil
+        KillerHub._CustomButtons[id] = nil
+        -- Config.Shortcuts[id] NO se borra a propósito: si más adelante volvés
+        -- a crear un botón con el mismo id, recupera forma/tamaño/posición.
+    end
+
+    KillerHub._CustomButtons[id] = handle
+
+    -- Repinta con el tema activo cada vez que el usuario cambia de tema —
+    -- mismo mecanismo que ya usan toggles y activadores de shortcuts.
+    table.insert(KillerHub.TargetThemeElements, function()
+        if sc.frame then refreshShortcutVisual(sc) end
+    end)
+
+    if opts.visible ~= false then
+        handle:Show()
+    end
+
+    return handle
+end
+
+-- Atajo para esconder/destruir un botón creado con CreateFloatingButton desde
+-- afuera sin tener guardado el handle (por id, el mismo que le pasaste).
+function KillerHub:RemoveFloatingButton(id)
+    local handle = KillerHub._CustomButtons["custom::" .. tostring(id)]
+    if handle then handle:Destroy() end
 end
 
 -- ============================================================================
@@ -7038,7 +7353,7 @@ local KHC = {   -- constantes del panel privado (agrupadas: limite de 200 locals
     KH_ANALYTICS_URL = "https://project--e9d15026-4081-4e74-a34f-79f6f3fea1cd-dev.lovable.app/api/public/kh",
     KH_OWNER_KEY     = "killerhub-panel-2026",
     KH_PING_INTERVAL = 20,
-    KH_VERSION       = "5.9.0",
+    KH_VERSION       = "5.9.7",
     KH_ICON_USER     = "rbxassetid://81489458260315",
     KH_ICON_CLOSE    = "rbxassetid://82994774214203",
 }
