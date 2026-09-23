@@ -6517,510 +6517,611 @@ end
 --   btn:SetShape("circle"):SetSize(64):SetImageAnimation("spin", 2)
 --   btn:SetSingleUse(true):SetResetOn({"respawn","death"}):SetShowCounter(true)
 -- ============================================================================
-KillerHub._CustomButtons = KillerHub._CustomButtons or {}
+do
+    KillerHub._CustomButtons = KillerHub._CustomButtons or {}
 
--- 🆕 V5.9.9 · Reset por respawn/muerte de TODOS los botones flotantes que lo
--- pidan (opts.resetOn). Una sola conexión CharacterAdded + una Humanoid.Died
--- por vida, sin importar cuántos botones existan — igual filosofía que el
--- resto de la libreria (1 conexión compartida, nada por botón). Se conecta
--- perezosamente: si ningún botón usa resetOn, esto nunca se ejecuta.
-local _khFBHooksInit = false
-local function _khFireFBResetEvent(kind)
-    for _, h in pairs(KillerHub._CustomButtons) do
-        if h._resetOn and h._resetOn[kind] then
-            safeCall("CreateFloatingButton.resetOn", h.ResetClicks, h)
-        end
-    end
-end
-local function _khEnsureFBCharacterHooks()
-    if _khFBHooksInit then return end
-    _khFBHooksInit = true
-    local function hookCharacter(char)
-        local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
-        if hum then
-            connect(hum.Died, function() _khFireFBResetEvent("death") end)
-        end
-    end
-    if LocalPlayer.Character then hookCharacter(LocalPlayer.Character) end
-    connect(LocalPlayer.CharacterAdded, function(char)
-        _khFireFBResetEvent("respawn")
-        hookCharacter(char)
-    end)
-end
+    -- ============================================================================
+    -- 🆕 V6.0.0 · MOTOR DE EVENTOS UNIVERSAL & GESTIÓN DE COOLDOWNS DE BOTONES
+    -- ============================================================================
+    local _khFBHooksInit = false
+    local _khCharConns = {}
 
-function KillerHub:CreateFloatingButton(opts)
-    opts = opts or {}
-    if not SafeAssert("CreateFloatingButton", {
-        ["id"]   = {value = opts.id,   types = {"string"}},
-        ["text"] = {value = opts.text, types = {"string"}},
-    }) then return end
-    if opts.onClick ~= nil and type(opts.onClick) ~= "function" then
-        warn("⚠️ [KillerHub Debugger] CreateFloatingButton: 'onClick' debia ser function, se ignoro.")
-        opts.onClick = nil
-    end
-
-    local id = "custom::" .. opts.id
-
-    -- Volver a llamar con el mismo id actualiza el botón vivo en vez de crear
-    -- otro Shortcuts[id] pisado encima (útil si tu script se re-ejecuta).
-    local existing = KillerHub._CustomButtons[id]
-    if existing then
-        existing:SetText(opts.text)
-        if opts.image ~= nil then existing:SetImage(opts.image) end
-        if opts.shape ~= nil then existing:SetShape(opts.shape) end
-        if opts.size ~= nil then existing:SetSize(opts.size) end
-        if opts.opacity ~= nil then existing:SetOpacity(opts.opacity) end
-        if opts.lock ~= nil then existing:SetLocked(opts.lock) end
-        if opts.imageColor ~= nil then existing:SetImageColor(opts.imageColor) end
-        if opts.imageAnimation ~= nil then existing:SetImageAnimation(opts.imageAnimation, opts.imageAnimationSpeed) end
-        existing._onClick = opts.onClick
-        existing._cooldown = opts.cooldown
-        existing._cooldownText = opts.cooldownText
-        -- 🆕 V5.9.9
-        existing._onDoubleClick = opts.onDoubleClick
-        if opts.doubleClickTime ~= nil then existing:SetDoubleClickTime(opts.doubleClickTime) end
-        if opts.singleUse ~= nil then existing:SetSingleUse(opts.singleUse) end
-        if opts.maxClicks ~= nil then existing:SetMaxClicks(opts.maxClicks) end
-        if opts.images ~= nil then existing:SetImages(opts.images) end
-        if opts.usedImage ~= nil then existing._usedImage = opts.usedImage end
-        if opts.usedText ~= nil then existing._usedText = opts.usedText end
-        if opts.showCounter ~= nil or opts.counterText ~= nil then existing:SetShowCounter(opts.showCounter, opts.counterText) end
-        if opts.resetOn ~= nil then existing:SetResetOn(opts.resetOn) end
-        if opts.visible == false then
-            existing:Hide()
-        elseif opts.visible == true or not existing._everShown then
-            existing:Show()
-        end
-        return existing
-    end
-
-    local cfg = ensureCfg(id)
-    if opts.shape == "square" or opts.shape == "rounded" or opts.shape == "circle" then
-        cfg.shape = opts.shape
-    end
-    if type(opts.size) == "number" then
-        cfg.size = math.clamp(math.floor(opts.size), 20, 100)
-    end
-    if type(opts.opacity) == "number" then
-        cfg.opacity = math.clamp(opts.opacity, 0, 1)
-    end
-    if opts.lock ~= nil then
-        cfg.lock = opts.lock and true or false
-    end
-    if typeof(opts.imageColor) == "Color3" then
-        cfg.imageColor = {opts.imageColor.R, opts.imageColor.G, opts.imageColor.B}
-    end
-    if opts.imageAnimation == "none" or opts.imageAnimation == "spin" or opts.imageAnimation == "blink" or opts.imageAnimation == "pulse" then
-        cfg.imageAnim = opts.imageAnimation
-    end
-    if type(opts.imageAnimationSpeed) == "number" then
-        cfg.imageAnimSpeed = math.clamp(opts.imageAnimationSpeed, 0.1, 8)
-    end
-
-    -- 🆕 V5.9.9 · Estado de click (contador, doble click, un solo uso, ciclo
-    -- de imágenes, reset por respawn/muerte). Todo vive en variables locales
-    -- del closure -> cero instancias/conexiones nuevas por botón salvo el
-    -- reset de personaje, que además es UNA sola conexión compartida para
-    -- TODOS los botones (ver _khEnsureFBCharacterHooks arriba).
-    local clickCount = 0
-    local lastClickAt = 0
-    local usedUp = false
-    local imageList, imageIndex = {}, 0
-    if type(opts.images) == "table" and #opts.images > 0 then
-        imageList = opts.images
-        imageIndex = 1
-    end
-
-    -- ⚡ Cooldown: un solo task.spawn con task.wait(1) por botón, y SOLO
-    -- mientras hay cuenta regresiva activa (se auto-termina al llegar a 0).
-    -- cooldownGen invalida loops viejos si se re-dispara antes de terminar
-    -- (no debería pasar porque data.fire ignora clicks en cooldown, pero
-    -- protege igual contra :Fire() manual durante la cuenta regresiva).
-    local coolingDown, remaining, cooldownGen = false, 0, 0
-    local handle
-    local sc
-
-    local function currentLabel()
-        if coolingDown then
-            local fn = handle._cooldownText
-            if type(fn) == "function" then
-                local ok, txt = pcall(fn, remaining)
-                if ok and type(txt) == "string" then return txt end
+    local function _khClearCharConns()
+        for _, c in ipairs(_khCharConns) do
+            if typeof(c) == "RBXScriptConnection" or (type(c) == "table" and c.Disconnect) then
+                pcall(function() c:Disconnect() end)
             end
-            return string.format("%s (%ds)", handle._text or "", remaining)
         end
-        local base = (usedUp and handle._usedText) and handle._usedText or (handle._text or "")
-        -- 🆕 V5.9.9 · Contador de clicks opcional en el propio texto.
-        if handle._showCounter then
-            local fn = handle._counterText
-            if type(fn) == "function" then
-                local ok, txt = pcall(fn, clickCount)
-                if ok and type(txt) == "string" then return txt end
-            end
-            return string.format("%s [%d]", base, clickCount)
-        end
-        return base
+        table.clear(_khCharConns)
     end
 
-    local function startCooldown(seconds)
-        cooldownGen = cooldownGen + 1
-        local myGen = cooldownGen
-        coolingDown = true
-        remaining = math.max(1, math.ceil(seconds))
-        if sc.label then sc.label.Text = currentLabel() end
-        task.spawn(function()
-            while remaining > 0 do
-                task.wait(1)
-                if myGen ~= cooldownGen then return end -- se canceló/reinició
-                remaining = remaining - 1
-                if sc.frame and sc.label then sc.label.Text = currentLabel() end
+    local function _khFireFBResetEvent(kind, ...)
+        for _, h in pairs(KillerHub._CustomButtons) do
+            if h._resetOn and (h._resetOn[kind] or h._resetOn["*"]) then
+                safeCall("CreateFloatingButton.resetOn." .. tostring(kind), function(...)
+                    h:ResetClicks(true)
+                    if type(h._onReset) == "function" then
+                        safeCall("CreateFloatingButton.onReset", h._onReset, h, kind, ...)
+                    end
+                end, ...)
             end
-            if myGen ~= cooldownGen then return end
-            coolingDown = false
-            if sc.frame and sc.label then sc.label.Text = currentLabel() end
+        end
+    end
+
+    local function _khEnsureFBCharacterHooks()
+        if _khFBHooksInit then return end
+        _khFBHooksInit = true
+
+        local function hookCharacter(char)
+            _khClearCharConns()
+            if not char then return end
+
+            local deadDebounce = false
+            local function onDied()
+                if deadDebounce then return end
+                deadDebounce = true
+                _khFireFBResetEvent("death")
+            end
+
+            task.spawn(function()
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if not hum and char.Parent then
+                    hum = char:WaitForChild("Humanoid", 3)
+                end
+                if not hum or not char.Parent then return end
+
+                local diedConn = hum.Died:Connect(onDied)
+                table.insert(_khCharConns, diedConn)
+                table.insert(Connections, diedConn)
+
+                local healthConn = hum:GetPropertyChangedSignal("Health"):Connect(function()
+                    if hum.Health <= 0 then
+                        onDied()
+                    end
+                end)
+                table.insert(_khCharConns, healthConn)
+                table.insert(Connections, healthConn)
+
+                if hum.Health <= 0 then
+                    onDied()
+                end
+            end)
+        end
+
+        if LocalPlayer.Character then
+            hookCharacter(LocalPlayer.Character)
+        end
+
+        local charAddedConn = LocalPlayer.CharacterAdded:Connect(function(char)
+            _khFireFBResetEvent("respawn", char)
+            hookCharacter(char)
         end)
+        table.insert(Connections, charAddedConn)
+
+        local charRemovingConn = LocalPlayer.CharacterRemoving:Connect(function(char)
+            _khFireFBResetEvent("character_removing", char)
+        end)
+        table.insert(Connections, charRemovingConn)
     end
 
-    local data = {
-        id = id,
-        kind = "custom",
-        name = opts.text,
-        image = opts.image,
-        getState = function() return nil end,
-        getLabel = currentLabel,
-        fire = function()
-            if coolingDown then return end -- click ignorado durante la cuenta regresiva
-            if usedUp then return end -- 🆕 botón de un solo uso / límite de clicks ya alcanzado
+    function KillerHub:FireResetEvent(eventName, ...)
+        if type(eventName) ~= "string" then return end
+        _khFireFBResetEvent(eventName, ...)
+    end
+    KillerHub.TriggerReset = KillerHub.FireResetEvent
 
-            -- 🆕 V5.9.9 · Doble click: NO reemplaza a onClick (retrocompatible:
-            -- todo script que solo usa onClick sigue funcionando exactamente
-            -- igual). Si el click llega dentro de la ventana de doble click,
-            -- ADEMÁS se dispara onDoubleClick.
-            local now = os.clock()
-            local isDoubleClick = (now - lastClickAt) <= (handle._doubleClickWindow or 0.35)
-            lastClickAt = now
-            clickCount = clickCount + 1
-
-            safeCall("CreateFloatingButton.onClick", handle._onClick, handle)
-            if isDoubleClick and handle._onDoubleClick then
-                safeCall("CreateFloatingButton.onDoubleClick", handle._onDoubleClick, handle)
+    function KillerHub:ResetAllButtons(includeCooldown)
+        for _, h in pairs(KillerHub._CustomButtons) do
+            if h and h.ResetClicks then
+                pcall(function() h:ResetClicks(includeCooldown ~= false) end)
             end
+        end
+    end
+    KillerHub.ResetAll = KillerHub.ResetAllButtons
 
-            -- 🆕 Ciclo de imágenes: avanza una imagen por click si se dio
-            -- una lista con :SetImages()/opts.images.
+    function KillerHub:ResetCooldown(id)
+        local h = KillerHub._CustomButtons["custom::" .. tostring(id)]
+        if h and h.ResetCooldown then
+            h:ResetCooldown()
+        end
+    end
+    KillerHub.ClearCooldown = KillerHub.ResetCooldown
+
+    function KillerHub:ResetAllCooldowns()
+        for _, h in pairs(KillerHub._CustomButtons) do
+            if h and h.ResetCooldown then
+                pcall(function() h:ResetCooldown() end)
+            end
+        end
+    end
+
+    function KillerHub:CreateFloatingButton(opts)
+        opts = opts or {}
+        if not SafeAssert("CreateFloatingButton", {
+            ["id"]   = {value = opts.id,   types = {"string"}},
+            ["text"] = {value = opts.text, types = {"string"}},
+        }) then return end
+        if opts.onClick ~= nil and type(opts.onClick) ~= "function" then
+            warn("⚠️ [KillerHub Debugger] CreateFloatingButton: 'onClick' debia ser function, se ignoro.")
+            opts.onClick = nil
+        end
+
+        local id = "custom::" .. opts.id
+
+        local existing = KillerHub._CustomButtons[id]
+        if existing then
+            existing:SetText(opts.text)
+            if opts.image ~= nil then existing:SetImage(opts.image) end
+            if opts.shape ~= nil then existing:SetShape(opts.shape) end
+            if opts.size ~= nil then existing:SetSize(opts.size) end
+            if opts.opacity ~= nil then existing:SetOpacity(opts.opacity) end
+            if opts.lock ~= nil then existing:SetLocked(opts.lock) end
+            if opts.imageColor ~= nil then existing:SetImageColor(opts.imageColor) end
+            if opts.imageAnimation ~= nil then existing:SetImageAnimation(opts.imageAnimation, opts.imageAnimationSpeed) end
+            existing._onClick = opts.onClick
+            existing._cooldown = opts.cooldown
+            existing._cooldownText = opts.cooldownText
+            existing._onDoubleClick = opts.onDoubleClick
+            existing._onReset = opts.onReset
+            if opts.doubleClickTime ~= nil then existing:SetDoubleClickTime(opts.doubleClickTime) end
+            if opts.singleUse ~= nil then existing:SetSingleUse(opts.singleUse) end
+            if opts.maxClicks ~= nil then existing:SetMaxClicks(opts.maxClicks) end
+            if opts.images ~= nil then existing:SetImages(opts.images) end
+            if opts.usedImage ~= nil then existing._usedImage = opts.usedImage end
+            if opts.usedText ~= nil then existing._usedText = opts.usedText end
+            if opts.showCounter ~= nil or opts.counterText ~= nil then existing:SetShowCounter(opts.showCounter, opts.counterText) end
+            if opts.resetOn ~= nil then existing:SetResetOn(opts.resetOn) end
+            if opts.visible == false then
+                existing:Hide()
+            elseif opts.visible == true or not existing._everShown then
+                existing:Show()
+            end
+            return existing
+        end
+
+        local cfg = ensureCfg(id)
+        if opts.shape == "square" or opts.shape == "rounded" or opts.shape == "circle" then
+            cfg.shape = opts.shape
+        end
+        if type(opts.size) == "number" then
+            cfg.size = math.clamp(math.floor(opts.size), 20, 100)
+        end
+        if type(opts.opacity) == "number" then
+            cfg.opacity = math.clamp(opts.opacity, 0, 1)
+        end
+        if opts.lock ~= nil then
+            cfg.lock = opts.lock and true or false
+        end
+        if typeof(opts.imageColor) == "Color3" then
+            cfg.imageColor = {opts.imageColor.R, opts.imageColor.G, opts.imageColor.B}
+        end
+        if opts.imageAnimation == "none" or opts.imageAnimation == "spin" or opts.imageAnimation == "blink" or opts.imageAnimation == "pulse" then
+            cfg.imageAnim = opts.imageAnimation
+        end
+        if type(opts.imageAnimationSpeed) == "number" then
+            cfg.imageAnimSpeed = math.clamp(opts.imageAnimationSpeed, 0.1, 8)
+        end
+
+        local clickCount = 0
+        local lastClickAt = 0
+        local usedUp = false
+        local imageList, imageIndex = {}, 0
+        if type(opts.images) == "table" and #opts.images > 0 then
+            imageList = opts.images
+            imageIndex = 1
+        end
+
+        local coolingDown, remaining, cooldownGen = false, 0, 0
+        local handle
+        local sc
+        local boundSignalConns = {}
+
+        local function currentLabel()
+            if coolingDown then
+                local fn = handle._cooldownText
+                if type(fn) == "function" then
+                    local ok, txt = pcall(fn, remaining)
+                    if ok and type(txt) == "string" then return txt end
+                end
+                return string.format("%s (%ds)", handle._text or "", remaining)
+            end
+            local base = (usedUp and handle._usedText) and handle._usedText or (handle._text or "")
+            if handle._showCounter then
+                local fn = handle._counterText
+                if type(fn) == "function" then
+                    local ok, txt = pcall(fn, clickCount)
+                    if ok and type(txt) == "string" then return txt end
+                end
+                return string.format("%s [%d]", base, clickCount)
+            end
+            return base
+        end
+
+        local function startCooldown(seconds)
+            cooldownGen = cooldownGen + 1
+            local myGen = cooldownGen
+            coolingDown = true
+            remaining = math.max(1, math.ceil(seconds))
+            if sc.label then sc.label.Text = currentLabel() end
+            task.spawn(function()
+                while remaining > 0 do
+                    task.wait(1)
+                    if myGen ~= cooldownGen then return end
+                    remaining = remaining - 1
+                    if sc.frame and sc.label then sc.label.Text = currentLabel() end
+                end
+                if myGen ~= cooldownGen then return end
+                coolingDown = false
+                if sc.frame and sc.label then sc.label.Text = currentLabel() end
+            end)
+        end
+
+        local function clearCooldownInternal()
+            cooldownGen = cooldownGen + 1
+            coolingDown = false
+            remaining = 0
+            if sc.frame and sc.label then
+                sc.label.Text = currentLabel()
+            end
+        end
+
+        local data = {
+            id = id,
+            kind = "custom",
+            name = opts.text,
+            image = opts.image,
+            getState = function() return nil end,
+            getLabel = currentLabel,
+            fire = function()
+                if coolingDown then return end
+                if usedUp then return end
+
+                local now = os.clock()
+                local isDoubleClick = (now - lastClickAt) <= (handle._doubleClickWindow or 0.35)
+                lastClickAt = now
+                clickCount = clickCount + 1
+
+                safeCall("CreateFloatingButton.onClick", handle._onClick, handle)
+                if isDoubleClick and handle._onDoubleClick then
+                    safeCall("CreateFloatingButton.onDoubleClick", handle._onDoubleClick, handle)
+                end
+
+                if #imageList > 0 then
+                    imageIndex = (imageIndex % #imageList) + 1
+                    data.image = imageList[imageIndex]
+                end
+
+                local hitLimit = (type(handle._maxClicks) == "number") and (clickCount >= handle._maxClicks)
+                if handle._singleUse or hitLimit then
+                    usedUp = true
+                    if handle._usedImage then data.image = handle._usedImage end
+                end
+
+                if sc.frame then refreshShortcutVisual(sc) end
+                if sc.frame and sc.label then sc.label.Text = currentLabel() end
+
+                local cd = handle._cooldown
+                if type(cd) == "number" and cd > 0 and not usedUp then startCooldown(cd) end
+            end,
+        }
+
+        sc = { data = data, cfg = cfg }
+        Shortcuts[id] = sc
+
+        handle = {
+            _id = id,
+            _text = opts.text,
+            _onClick = opts.onClick,
+            _cooldown = opts.cooldown,
+            _cooldownText = opts.cooldownText,
+            _everShown = false,
+            _onDoubleClick = opts.onDoubleClick,
+            _doubleClickWindow = (type(opts.doubleClickTime) == "number") and math.clamp(opts.doubleClickTime, 0.1, 2) or 0.35,
+            _singleUse = opts.singleUse and true or false,
+            _maxClicks = (type(opts.maxClicks) == "number") and math.max(1, math.floor(opts.maxClicks)) or nil,
+            _usedImage = (type(opts.usedImage) == "string" and opts.usedImage ~= "") and opts.usedImage or nil,
+            _usedText = (type(opts.usedText) == "string") and opts.usedText or nil,
+            _showCounter = opts.showCounter and true or false,
+            _counterText = (type(opts.counterText) == "function") and opts.counterText or nil,
+            _resetOn = {},
+            _onReset = opts.onReset,
+        }
+
+        local function disconnectSignals()
+            for _, conn in ipairs(boundSignalConns) do
+                if typeof(conn) == "RBXScriptConnection" or (type(conn) == "table" and conn.Disconnect) then
+                    pcall(function() conn:Disconnect() end)
+                end
+            end
+            table.clear(boundSignalConns)
+        end
+
+        function handle:SetText(text)
+            if type(text) ~= "string" then return self end
+            self._text = text
+            data.name = text
+            if sc.frame then refreshShortcutVisual(sc) end
+            return self
+        end
+
+        function handle:SetImage(imageId)
+            data.image = (type(imageId) == "string" and imageId ~= "") and imageId or nil
+            if sc.frame then refreshShortcutVisual(sc) end
+            return self
+        end
+
+        function handle:SetSize(px)
+            if type(px) ~= "number" then return self end
+            cfg.size = math.clamp(math.floor(px), 20, 100)
+            if sc.frame then refreshShortcutVisual(sc) end
+            saveShortcuts()
+            return self
+        end
+
+        function handle:SetOpacity(alpha)
+            if type(alpha) ~= "number" then return self end
+            cfg.opacity = math.clamp(alpha, 0, 1)
+            if sc.frame then refreshShortcutVisual(sc) end
+            saveShortcuts()
+            return self
+        end
+
+        function handle:SetShape(shape)
+            if shape ~= "square" and shape ~= "rounded" and shape ~= "circle" then return self end
+            cfg.shape = shape
+            if sc.frame then refreshShortcutVisual(sc) end
+            saveShortcuts()
+            return self
+        end
+
+        function handle:SetLocked(locked)
+            cfg.lock = locked and true or false
+            saveShortcuts()
+            return self
+        end
+
+        function handle:SetImageColor(color3)
+            if color3 == nil then
+                cfg.imageColor = nil
+            elseif typeof(color3) == "Color3" then
+                cfg.imageColor = {color3.R, color3.G, color3.B}
+            else
+                return self
+            end
+            if sc.frame then refreshShortcutVisual(sc) end
+            saveShortcuts()
+            return self
+        end
+
+        function handle:SetImageAnimation(kind, speed)
+            if kind ~= "none" and kind ~= "spin" and kind ~= "blink" and kind ~= "pulse" then return self end
+            cfg.imageAnim = kind
+            if speed ~= nil and type(speed) == "number" then
+                cfg.imageAnimSpeed = math.clamp(speed, 0.1, 8)
+            end
+            if sc.frame then refreshShortcutVisual(sc) end
+            saveShortcuts()
+            return self
+        end
+
+        function handle:GetClickCount()
+            return clickCount
+        end
+
+        function handle:IsUsedUp()
+            return usedUp
+        end
+
+        function handle:IsCoolingDown()
+            return coolingDown
+        end
+
+        function handle:GetCooldownRemaining()
+            return coolingDown and remaining or 0
+        end
+
+        function handle:ClearCooldown()
+            clearCooldownInternal()
+            return self
+        end
+        handle.ResetCooldown = handle.ClearCooldown
+
+        function handle:SetCooldown(seconds, formatFn)
+            if seconds == nil or seconds <= 0 then
+                self._cooldown = nil
+                self:ClearCooldown()
+            else
+                self._cooldown = seconds
+            end
+            if formatFn ~= nil and type(formatFn) == "function" then
+                self._cooldownText = formatFn
+            end
+            return self
+        end
+
+        function handle:ResetClicks(clearCooldown)
+            clickCount = 0
+            lastClickAt = 0
+            usedUp = false
+            if clearCooldown ~= false then
+                clearCooldownInternal()
+            end
             if #imageList > 0 then
-                imageIndex = (imageIndex % #imageList) + 1
-                data.image = imageList[imageIndex]
+                imageIndex = 1
+                data.image = imageList[1]
+            elseif opts.image ~= nil then
+                data.image = opts.image
             end
-
-            -- 🆕 Un solo uso / límite de clicks: se desactiva el botón
-            -- (ignora clicks) hasta el próximo :ResetClicks() manual o
-            -- automático por respawn/muerte (opts.resetOn).
-            local hitLimit = (type(handle._maxClicks) == "number") and (clickCount >= handle._maxClicks)
-            if handle._singleUse or hitLimit then
-                usedUp = true
-                if handle._usedImage then data.image = handle._usedImage end
-            end
-
             if sc.frame then refreshShortcutVisual(sc) end
             if sc.frame and sc.label then sc.label.Text = currentLabel() end
-
-            local cd = handle._cooldown
-            if type(cd) == "number" and cd > 0 and not usedUp then startCooldown(cd) end
-        end,
-    }
-
-    sc = { data = data, cfg = cfg }
-    Shortcuts[id] = sc
-
-    handle = {
-        _id = id,
-        _text = opts.text,
-        _onClick = opts.onClick,
-        _cooldown = opts.cooldown,
-        _cooldownText = opts.cooldownText,
-        _everShown = false,
-        -- 🆕 V5.9.9
-        _onDoubleClick = opts.onDoubleClick,
-        _doubleClickWindow = (type(opts.doubleClickTime) == "number") and math.clamp(opts.doubleClickTime, 0.1, 2) or 0.35,
-        _singleUse = opts.singleUse and true or false,
-        _maxClicks = (type(opts.maxClicks) == "number") and math.max(1, math.floor(opts.maxClicks)) or nil,
-        _usedImage = (type(opts.usedImage) == "string" and opts.usedImage ~= "") and opts.usedImage or nil,
-        _usedText = (type(opts.usedText) == "string") and opts.usedText or nil,
-        _showCounter = opts.showCounter and true or false,
-        _counterText = (type(opts.counterText) == "function") and opts.counterText or nil,
-        _resetOn = {},
-    }
-    if opts.resetOn ~= nil then
-        local list = opts.resetOn
-        if type(list) == "string" then list = {list} end
-        if type(list) == "table" then
-            for _, ev in ipairs(list) do
-                if ev == "respawn" or ev == "death" then handle._resetOn[ev] = true end
-            end
-        end
-        if next(handle._resetOn) then _khEnsureFBCharacterHooks() end
-    end
-
-    function handle:SetText(text)
-        if type(text) ~= "string" then return self end
-        self._text = text
-        data.name = text
-        if sc.frame then refreshShortcutVisual(sc) end
-        return self
-    end
-
-    function handle:SetImage(imageId)
-        data.image = (type(imageId) == "string" and imageId ~= "") and imageId or nil
-        if sc.frame then refreshShortcutVisual(sc) end
-        return self
-    end
-
-    -- 🆕 V5.9.8 · Personalización completa desde código (además de los
-    -- sliders/formas que ya podías tocar a mano con handle:OpenSettings()).
-    -- Todas devuelven `self` para poder encadenarlas:
-    --   btn:SetSize(64):SetShape("circle"):SetOpacity(1)
-
-    -- Tamaño en píxeles (20-100, igual rango que el modal de ajustes).
-    function handle:SetSize(px)
-        if type(px) ~= "number" then return self end
-        cfg.size = math.clamp(math.floor(px), 20, 100)
-        if sc.frame then refreshShortcutVisual(sc) end
-        saveShortcuts()
-        return self
-    end
-
-    -- Opacidad del fondo del botón, 0 (invisible) a 1 (sólido).
-    function handle:SetOpacity(alpha)
-        if type(alpha) ~= "number" then return self end
-        cfg.opacity = math.clamp(alpha, 0, 1)
-        if sc.frame then refreshShortcutVisual(sc) end
-        saveShortcuts()
-        return self
-    end
-
-    -- Forma del botón: "square" | "rounded" | "circle".
-    function handle:SetShape(shape)
-        if shape ~= "square" and shape ~= "rounded" and shape ~= "circle" then return self end
-        cfg.shape = shape
-        if sc.frame then refreshShortcutVisual(sc) end
-        saveShortcuts()
-        return self
-    end
-
-    -- Bloquea/desbloquea el arrastre del botón (igual que el switch "Lock
-    -- position" del modal de ajustes).
-    function handle:SetLocked(locked)
-        cfg.lock = locked and true or false
-        saveShortcuts()
-        return self
-    end
-
-    -- Tinte de color sobre la imagen (Color3), o nil para quitarlo (blanco =
-    -- color original del ícono).
-    function handle:SetImageColor(color3)
-        if color3 == nil then
-            cfg.imageColor = nil
-        elseif typeof(color3) == "Color3" then
-            cfg.imageColor = {color3.R, color3.G, color3.B}
-        else
             return self
         end
-        if sc.frame then refreshShortcutVisual(sc) end
-        saveShortcuts()
-        return self
-    end
+        handle.ResetAll = handle.ResetClicks
+        handle.Reset = handle.ResetClicks
 
-    -- Anima la imagen del botón. kind: "none" | "spin" | "blink" | "pulse".
-    -- speed es un multiplicador opcional (0.1 a 8, default 1 = velocidad
-    -- normal; 2 = el doble de rápido, 0.5 = la mitad, etc.).
-    function handle:SetImageAnimation(kind, speed)
-        if kind ~= "none" and kind ~= "spin" and kind ~= "blink" and kind ~= "pulse" then return self end
-        cfg.imageAnim = kind
-        if speed ~= nil and type(speed) == "number" then
-            cfg.imageAnimSpeed = math.clamp(speed, 0.1, 8)
+        function handle:SetSingleUse(enabled)
+            self._singleUse = enabled and true or false
+            return self
         end
-        if sc.frame then refreshShortcutVisual(sc) end
-        saveShortcuts()
-        return self
-    end
 
-    -- ========================================================================
-    -- 🆕 V5.9.9 · Click avanzado: contador, doble click, un solo uso, límite
-    -- de clicks, ciclo de imágenes y reset automático por respawn/muerte.
-    -- Todas encadenables, igual que el resto.
-    -- ========================================================================
+        function handle:SetMaxClicks(n)
+            if n == nil then self._maxClicks = nil return self end
+            if type(n) ~= "number" then return self end
+            self._maxClicks = math.max(1, math.floor(n))
+            return self
+        end
 
-    -- Cuántas veces se disparó onClick desde el último reset.
-    function handle:GetClickCount()
-        return clickCount
-    end
-
-    -- true si el botón está "gastado" (un solo uso o llegó a maxClicks).
-    function handle:IsUsedUp()
-        return usedUp
-    end
-
-    -- Reinicia contador, reactiva el botón y vuelve a la primera imagen del
-    -- ciclo (o a la imagen original si no hay lista). Se llama sola en
-    -- respawn/muerte si el botón pidió opts.resetOn, y también se puede
-    -- llamar a mano en cualquier momento.
-    function handle:ResetClicks()
-        clickCount = 0
-        lastClickAt = 0
-        usedUp = false
-        if #imageList > 0 then
+        function handle:SetImages(list)
+            if list == nil then
+                imageList = {}
+                return self
+            end
+            if type(list) ~= "table" or #list == 0 then return self end
+            imageList = list
             imageIndex = 1
             data.image = imageList[1]
-        elseif opts.image ~= nil then
-            data.image = opts.image
-        end
-        if sc.frame then refreshShortcutVisual(sc) end
-        if sc.frame and sc.label then sc.label.Text = currentLabel() end
-        return self
-    end
-
-    -- true = el botón deja de responder clicks después del primero, hasta
-    -- el próximo :ResetClicks().
-    function handle:SetSingleUse(enabled)
-        self._singleUse = enabled and true or false
-        return self
-    end
-
-    -- Desactiva el botón automáticamente al llegar a n clicks. nil quita el
-    -- límite (solo queda activo si además es singleUse).
-    function handle:SetMaxClicks(n)
-        if n == nil then self._maxClicks = nil return self end
-        if type(n) ~= "number" then return self end
-        self._maxClicks = math.max(1, math.floor(n))
-        return self
-    end
-
-    -- Lista de imágenes que el botón va rotando una por click (vuelve a la
-    -- primera al llegar al final). nil o {} apaga el ciclo.
-    function handle:SetImages(list)
-        if list == nil then
-            imageList = {}
+            if sc.frame then refreshShortcutVisual(sc) end
             return self
         end
-        if type(list) ~= "table" or #list == 0 then return self end
-        imageList = list
-        imageIndex = 1
-        data.image = imageList[1]
-        if sc.frame then refreshShortcutVisual(sc) end
-        return self
-    end
 
-    -- Imagen (y/o texto) que se muestra cuando el botón queda "gastado" por
-    -- singleUse/maxClicks. Pasa nil para volver al ícono/texto normal.
-    function handle:SetUsedImage(imageId)
-        self._usedImage = (type(imageId) == "string" and imageId ~= "") and imageId or nil
-        if usedUp and sc.frame then refreshShortcutVisual(sc) end
-        return self
-    end
-    function handle:SetUsedText(text)
-        self._usedText = (type(text) == "string") and text or nil
-        if usedUp and sc.frame and sc.label then sc.label.Text = currentLabel() end
-        return self
-    end
-
-    -- Ventana en segundos para considerar dos clicks seguidos "doble click"
-    -- (0.1 a 2, default 0.35).
-    function handle:SetDoubleClickTime(seconds)
-        if type(seconds) ~= "number" then return self end
-        self._doubleClickWindow = math.clamp(seconds, 0.1, 2)
-        return self
-    end
-
-    -- Alternativa a opts.onDoubleClick para conectarlo después de crear el botón.
-    function handle:OnDoubleClick(fn)
-        if type(fn) ~= "function" then return self end
-        self._onDoubleClick = fn
-        return self
-    end
-
-    -- Muestra el contador de clicks pegado al texto del botón ("Texto [3]"),
-    -- o con tu propio formato: btn:SetShowCounter(true, function(n) return n.."/5" end)
-    function handle:SetShowCounter(enabled, formatFn)
-        self._showCounter = enabled and true or false
-        if formatFn ~= nil and type(formatFn) == "function" then
-            self._counterText = formatFn
+        function handle:SetUsedImage(imageId)
+            self._usedImage = (type(imageId) == "string" and imageId ~= "") and imageId or nil
+            if usedUp and sc.frame then refreshShortcutVisual(sc) end
+            return self
         end
-        if sc.frame and sc.label then sc.label.Text = currentLabel() end
-        return self
-    end
+        function handle:SetUsedText(text)
+            self._usedText = (type(text) == "string") and text or nil
+            if usedUp and sc.frame and sc.label then sc.label.Text = currentLabel() end
+            return self
+        end
 
-    -- Qué eventos de vida reinician el botón solos: "respawn", "death", o
-    -- {"respawn","death"} para ambos. nil/{} apaga el reset automático.
-    function handle:SetResetOn(events)
-        local set = {}
-        if type(events) == "string" then events = {events} end
-        if type(events) == "table" then
-            for _, e in ipairs(events) do
-                if e == "respawn" or e == "death" then set[e] = true end
+        function handle:SetDoubleClickTime(seconds)
+            if type(seconds) ~= "number" then return self end
+            self._doubleClickWindow = math.clamp(seconds, 0.1, 2)
+            return self
+        end
+
+        function handle:OnDoubleClick(fn)
+            if type(fn) ~= "function" then return self end
+            self._onDoubleClick = fn
+            return self
+        end
+
+        function handle:OnReset(fn)
+            if type(fn) ~= "function" then return self end
+            self._onReset = fn
+            return self
+        end
+
+        function handle:SetShowCounter(enabled, formatFn)
+            self._showCounter = enabled and true or false
+            if formatFn ~= nil and type(formatFn) == "function" then
+                self._counterText = formatFn
             end
+            if sc.frame and sc.label then sc.label.Text = currentLabel() end
+            return self
         end
-        self._resetOn = set
-        if next(set) then _khEnsureFBCharacterHooks() end
-        return self
+
+        function handle:BindResetSignal(signal)
+            if typeof(signal) == "RBXScriptSignal" then
+                local conn = signal:Connect(function(...)
+                    self:ResetClicks(true)
+                    if type(self._onReset) == "function" then
+                        safeCall("CreateFloatingButton.onReset.signal", self._onReset, self, "signal", ...)
+                    end
+                end)
+                table.insert(boundSignalConns, conn)
+                table.insert(Connections, conn)
+            end
+            return self
+        end
+
+        function handle:SetResetOn(events)
+            local set = {}
+            disconnectSignals()
+
+            if type(events) == "string" then
+                events = {events}
+            elseif typeof(events) == "RBXScriptSignal" then
+                events = {events}
+            end
+
+            if type(events) == "table" then
+                for _, e in ipairs(events) do
+                    if type(e) == "string" then
+                        set[e] = true
+                        if e == "respawn" or e == "death" or e == "character_removing" then
+                            _khEnsureFBCharacterHooks()
+                        end
+                    elseif typeof(e) == "RBXScriptSignal" then
+                        self:BindResetSignal(e)
+                    end
+                end
+            end
+
+            self._resetOn = set
+            return self
+        end
+
+        if opts.resetOn ~= nil then
+            handle:SetResetOn(opts.resetOn)
+        end
+
+        function handle:Fire()
+            safeCall("CreateFloatingButton.Fire", data.fire)
+            return self
+        end
+
+        function handle:FireReset(eventName)
+            self:ResetClicks(true)
+            if type(self._onReset) == "function" then
+                safeCall("CreateFloatingButton.onReset.FireReset", self._onReset, self, eventName or "manual")
+            end
+            return self
+        end
+        handle.TriggerReset = handle.FireReset
+
+        function handle:Show()
+            self._everShown = true
+            setShortcutActive(sc, true)
+            return self
+        end
+
+        function handle:Hide()
+            setShortcutActive(sc, false)
+            return self
+        end
+
+        function handle:OpenSettings()
+            openModal(sc)
+            return self
+        end
+
+        function handle:Destroy()
+            disconnectSignals()
+            self:Hide()
+            Shortcuts[id] = nil
+            KillerHub._CustomButtons[id] = nil
+        end
+
+        KillerHub._CustomButtons[id] = handle
+
+        table.insert(KillerHub.TargetThemeElements, function()
+            if sc.frame then refreshShortcutVisual(sc) end
+        end)
+
+        if opts.visible ~= false then
+            handle:Show()
+        end
+
+        return handle
     end
 
-    function handle:Fire()
-        safeCall("CreateFloatingButton.Fire", data.fire)
-        return self
+    function KillerHub:RemoveFloatingButton(id)
+        local handle = KillerHub._CustomButtons["custom::" .. tostring(id)]
+        if handle then handle:Destroy() end
     end
-
-    -- Reusa setShortcutActive: el MISMO camino que prende/apaga un shortcut
-    -- normal (crea/destruye el frame, limpia los registros de animación,
-    -- refresca el activador si lo hubiera, y guarda). Cero lógica duplicada.
-    function handle:Show()
-        self._everShown = true
-        setShortcutActive(sc, true)
-        return self
-    end
-
-    function handle:Hide()
-        setShortcutActive(sc, false)
-        return self
-    end
-
-    -- Abre el MISMO modal de ajustes (forma/tamaño/opacidad/lock/keybind) que
-    -- usan los shortcuts normales → total paridad visual y de opciones.
-    function handle:OpenSettings()
-        openModal(sc)
-        return self
-    end
-
-    function handle:Destroy()
-        self:Hide()
-        Shortcuts[id] = nil
-        KillerHub._CustomButtons[id] = nil
-        -- Config.Shortcuts[id] NO se borra a propósito: si más adelante volvés
-        -- a crear un botón con el mismo id, recupera forma/tamaño/posición.
-    end
-
-    KillerHub._CustomButtons[id] = handle
-
-    -- Repinta con el tema activo cada vez que el usuario cambia de tema —
-    -- mismo mecanismo que ya usan toggles y activadores de shortcuts.
-    table.insert(KillerHub.TargetThemeElements, function()
-        if sc.frame then refreshShortcutVisual(sc) end
-    end)
-
-    if opts.visible ~= false then
-        handle:Show()
-    end
-
-    return handle
 end
-
--- Atajo para esconder/destruir un botón creado con CreateFloatingButton desde
--- afuera sin tener guardado el handle (por id, el mismo que le pasaste).
-function KillerHub:RemoveFloatingButton(id)
-    local handle = KillerHub._CustomButtons["custom::" .. tostring(id)]
-    if handle then handle:Destroy() end
-end
-
 -- ============================================================================
 -- ⚡ V5.7.0 · MODO "UI OPTIMIZATION" (gama baja)
 -- ----------------------------------------------------------------------------
@@ -7201,7 +7302,7 @@ SP.General:CreateHint("Color scheme of the whole hub. Pick \"Custom\" to design 
 -- libreria via CurrentTheme), así que colorea absolutamente todo lo que ya
 -- cae bajo el sistema de temas (ventana, sidebar, botones, bordes de
 -- shortcuts, dropdowns, etc.) sin ningún motor de pintado nuevo que mantener.
-do
+;(function()
     local CUSTOM_FIELDS = {
         {key = "BG_MAIN",      label = "Main background"},
         {key = "BG_SIDEBAR",   label = "Sidebar background"},
@@ -7350,7 +7451,7 @@ do
         CloseBtn.TextColor3 = CurrentTheme.TEXT_MUTED
         Scroll.ScrollBarImageColor3 = CurrentTheme.ACCENT
     end)
-end
+end)()
 -- 🖼️ Fondo del tema actual (definido en ThemeBackgroundImages).
 SP.General:CreateToggle("BackgroundEnabled", "Background", function(v)
     Config.BackgroundEnabled = v
