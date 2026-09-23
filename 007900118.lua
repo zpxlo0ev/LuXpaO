@@ -1,5 +1,33 @@
 -- ============================================================================
--- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.7)
+-- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.8)
+-- Changelog V5.9.8 (fix centrado de texto + personalización de íconos + perf):
+--   • 🩹 FIX: texto de los shortcuts descentrado/"más abajo" — sobre todo
+--     visible en shortcuts de Toggle (sufijo ": ON"/": OFF"). Causa real: la
+--     combinación TextScaled + TextWrapped + UITextSizeConstraint tiene un
+--     comportamiento de motor conocido por NO volver a centrar el texto
+--     cuando el tamaño "ideal" calculado queda por encima del techo del
+--     constraint. Se reemplazó por un cálculo propio (fitShortcutLabel, con
+--     TextService:GetTextSize + cache) que asigna un TextSize FIJO — con
+--     TextSize fijo el motor sí centra bien. Aplica a TODOS los shortcuts
+--     (toggles, botones normales y los creados por CreateFloatingButton).
+--   • ⚡ Efecto colateral de rendimiento del fix de arriba: un TextSize fijo
+--     recalculado y cacheado por texto/tamaño es más liviano en gama baja que
+--     el recálculo continuo de layout de TextScaled+TextWrapped; también se
+--     eliminó el UITextSizeConstraint por shortcut (una Instance menos cada
+--     uno). Se auditó el resto de la librería buscando loops sin límite,
+--     conexiones/threads redundantes, etc. — el motor de animación (borde/
+--     ola/hotkeys/watcher de toggles) ya usa una única Heartbeat compartida y
+--     conexiones únicas globales, así que no se encontraron cuellos de
+--     botella nuevos que corregir ahí.
+--   • 🆕 KillerHub:CreateFloatingButton súper personalizable: nuevos campos
+--     opacity, lock, imageColor (tinte), imageAnimation ("none"|"spin"|
+--     "blink"|"pulse") e imageAnimationSpeed, más los métodos encadenables
+--     handle:SetSize() SetOpacity() SetShape() SetLocked() SetImageColor()
+--     SetImageAnimation(). La animación de ícono reutiliza la MISMA Heartbeat
+--     compartida que el resto de la librería (cero threads/conexiones nuevas
+--     por botón, aunque tengas varios animados a la vez). El tamaño/forma/
+--     opacidad ya eran ajustables a mano por el jugador con sliders desde
+--     handle:OpenSettings() — sigue igual, ahora con más para tocar por API.
 -- Changelog V5.9.7 (API de botones flotantes + rediseño shortcuts + fixes):
 --   • 🆕 KillerHub:CreateFloatingButton({...}) — API nueva y ADITIVA (no rompe
 --     nada existente) para crear botones flotantes iguales a los de un
@@ -1628,6 +1656,18 @@ local ShortcutLabelWaves = {}   -- id -> UIGradient del texto (ola hacia la dere
 KHS.WAVE_SPEED = 0.85         -- valor base; Config.WaveSpeed manda
 KHS._waveOffset = 0
 
+-- 🆕 V5.9.8 · Animación de ÍCONO (spin/blink/pulse) para botones flotantes con
+-- imagen (KillerHub:CreateFloatingButton). Sigue EXACTAMENTE el mismo patrón
+-- que el borde/la ola de arriba: tablas id -> datos, recorridas por la ÚNICA
+-- Heartbeat compartida de toda la librería (_borderAnimStep, más abajo). Cero
+-- conexiones/threads nuevos por ícono — tener 1 o 20 íconos animados cuesta
+-- prácticamente lo mismo, clave para que esto no pegue en teléfonos de gama
+-- baja.
+local ShortcutIconSpins  = {} -- id -> {inst = ImageLabel, speed = grados/seg}
+local ShortcutIconBlinks = {} -- id -> {inst = ImageLabel, speed = ciclos/seg}
+local ShortcutIconPulses = {} -- id -> {inst = ImageLabel, scale = UIScale, speed = ciclos/seg}
+KHS._iconAnimT = 0
+
 local function _borderAnimStep(dt)
     -- ⚡ UiLite: cero trabajo por frame (ni una comparación más allá de esta).
     if Config.UiLite then return end
@@ -1637,6 +1677,7 @@ local function _borderAnimStep(dt)
     -- ni siquiera avanzamos el ángulo. Antes se seguían haciendo cuentas y
     -- comprobaciones cada frame con el hub cerrado.
     local scLive = next(ShortcutBorderAnims) ~= nil or next(ShortcutLabelWaves) ~= nil
+        or next(ShortcutIconSpins) ~= nil or next(ShortcutIconBlinks) ~= nil or next(ShortcutIconPulses) ~= nil
     local winLive = MainFrame.Visible and menuFocused
     local floatLive = OpenCloseBtn.Visible and (Config.FloatBorder ~= false and not Config.UiLite)
     if not (winLive or floatLive or scLive) then return end
@@ -1711,6 +1752,42 @@ local function _borderAnimStep(dt)
             if g.Parent then g.Offset = off else ShortcutLabelWaves[key] = nil end
         end
 
+    end
+
+    -- 🆕 Íconos animados (spin / blink / pulse) de botones flotantes con imagen.
+    -- Mismo criterio de costo-cero-si-no-hay-nada: un único acumulador de
+    -- tiempo compartido, y solo se itera cada tabla si tiene algo adentro.
+    if next(ShortcutIconSpins) ~= nil or next(ShortcutIconBlinks) ~= nil or next(ShortcutIconPulses) ~= nil then
+        KHS._iconAnimT = (KHS._iconAnimT + dt) % 1000
+        if next(ShortcutIconSpins) ~= nil then
+            for key, e in pairs(ShortcutIconSpins) do
+                if e.inst.Parent then
+                    e.inst.Rotation = (KHS._iconAnimT * e.speed) % 360
+                else
+                    ShortcutIconSpins[key] = nil
+                end
+            end
+        end
+        if next(ShortcutIconBlinks) ~= nil then
+            for key, e in pairs(ShortcutIconBlinks) do
+                if e.inst.Parent then
+                    local t = (math.sin(KHS._iconAnimT * e.speed * math.pi * 2) + 1) * 0.5 -- 0..1
+                    e.inst.ImageTransparency = (1 - t) * 0.85
+                else
+                    ShortcutIconBlinks[key] = nil
+                end
+            end
+        end
+        if next(ShortcutIconPulses) ~= nil then
+            for key, e in pairs(ShortcutIconPulses) do
+                if e.scale and e.scale.Parent then
+                    local t = (math.sin(KHS._iconAnimT * e.speed * math.pi * 2) + 1) * 0.5 -- 0..1
+                    e.scale.Scale = 0.85 + t * 0.15
+                else
+                    ShortcutIconPulses[key] = nil
+                end
+            end
+        end
     end
 end
 connect(RunService.Heartbeat, _borderAnimStep)
@@ -5117,7 +5194,17 @@ end
 
 local function defaultCfg()
     -- x/y = -1 → aún sin posición asignada; se calcula automáticamente al activar
-    return { shape = "square", size = 48, opacity = 0.85, lock = false, x = -1, y = -1, active = false, userMoved = false, key = "" }
+    -- 🆕 V5.9.8: imageAnim/imageAnimSpeed/imageColor son opcionales y solo se
+    -- usan en botones creados con KillerHub:CreateFloatingButton que tengan
+    -- imagen — para un shortcut normal (toggle/button de un Tab) quedan sin
+    -- usar, así que no cambian nada de lo ya existente.
+    return {
+        shape = "square", size = 48, opacity = 0.85, lock = false,
+        x = -1, y = -1, active = false, userMoved = false, key = "",
+        imageAnim = "none",     -- "none" | "spin" | "blink" | "pulse"
+        imageAnimSpeed = 1,     -- 0.1 - 8, multiplicador de velocidad
+        imageColor = nil,       -- {R,G,B} 0-1 (mismo formato que CreateColorPicker) o nil = sin tinte
+    }
 end
 
 -- 🧭 Grid automático: reparte shortcuts arriba de la pantalla en filas, evitando
@@ -5162,11 +5249,107 @@ local function applyShape(instance, shape)
     end
 end
 
-local function computeSize(cfg)
+-- 📐 Tamaño del botón en píxeles crudos (sin envolver en UDim2). Se usa tanto
+-- para el Size real del frame como para calcular el tamaño de texto que cabe
+-- adentro (ver fitShortcutLabel) sin depender de AbsoluteSize, que en el
+-- primer frame tras crear la instancia puede no estar actualizado todavía.
+local function computeSizePx(cfg)
     if cfg.shape == "rounded" then
-        return UDim2.new(0, math.floor(cfg.size * 2.2), 0, cfg.size)
+        return math.floor(cfg.size * 2.2), cfg.size
     end
-    return UDim2.new(0, cfg.size, 0, cfg.size)
+    return cfg.size, cfg.size
+end
+
+local function computeSize(cfg)
+    local w, h = computeSizePx(cfg)
+    return UDim2.new(0, w, 0, h)
+end
+
+-- 🩹 V5.9.8 · FIX centrado del texto de los shortcuts
+-- ----------------------------------------------------------------------------
+-- Antes el texto usaba TextScaled=true + un UITextSizeConstraint como techo.
+-- Esa combinación (TextScaled + TextWrapped + UITextSizeConstraint) es una
+-- combinación con un comportamiento de motor conocido por no volver a centrar
+-- el texto correctamente cuando el tamaño "ideal" que Roblox calcula queda por
+-- encima del techo del constraint: el motor achica la letra hasta el máximo
+-- permitido pero el centrado vertical se calculó para el tamaño más grande de
+-- antes de aplicar el techo, así que el bloque de texto queda visualmente
+-- descentrado (típicamente pegado hacia abajo) — exactamente el síntoma
+-- reportado, y pasa más seguido en los shortcuts de un Toggle porque el sufijo
+-- ": ON"/": OFF" alarga el texto y fuerza el wrap/achique con más frecuencia
+-- que un botón custom con texto corto.
+--
+-- El fix: dejamos de usar TextScaled del todo. Calculamos nosotros mismos,
+-- con TextService:GetTextSize, el TextSize entero más grande que entra en el
+-- espacio disponible (achicando desde el techo hasta que entre) y se lo
+-- asignamos como un TextSize fijo. Con TextSize fijo (no escalado), Roblox
+-- SÍ centra el bloque de texto correctamente dentro de la label.
+-- Efecto secundario positivo de rendimiento: TextScaled+TextWrapped le exige
+-- al motor recalcular el layout de glifos de forma continua mientras que un
+-- TextSize fijo se calcula una sola vez por cambio real de texto/tamaño (hay
+-- una cache por label más abajo), así que en gama baja esto es más liviano,
+-- no solo más prolijo.
+local TextService = KH_svc("TextService")
+local _textFitCache = setmetatable({}, {__mode = "k"}) -- label -> {key=str, size=number}
+local function fitShortcutLabel(label, boxW, boxH, maxSize)
+    local text = label.Text
+    local w = math.max(math.floor(boxW), 1)
+    local h = math.max(math.floor(boxH), 1)
+    maxSize = math.clamp(math.floor(maxSize), 7, 14)
+    if text == "" then
+        label.TextSize = maxSize
+        return
+    end
+    local key = text .. "\1" .. w .. "\1" .. h .. "\1" .. maxSize
+    local cached = _textFitCache[label]
+    if cached and cached.key == key then
+        if label.TextSize ~= cached.size then label.TextSize = cached.size end
+        return
+    end
+    local chosen = 6
+    for size = maxSize, 6, -1 do
+        local ok, bounds = pcall(TextService.GetTextSize, TextService, text, size, label.Font, Vector2.new(w, 4000))
+        if ok and bounds.Y <= h then
+            chosen = size
+            break
+        end
+    end
+    label.TextScaled = false
+    label.TextSize = chosen
+    _textFitCache[label] = {key = key, size = chosen}
+end
+
+-- 🆕 V5.9.8 · Animación de ícono: registra/desregistra un ImageLabel en las
+-- tablas compartidas de arriba según sc.cfg.imageAnim. Ver comentario de
+-- ShortcutIconSpins/Blinks/Pulses para el porqué del diseño (cero conexiones
+-- nuevas por botón).
+local function unregisterIconAnim(sc)
+    local id = sc.data.id
+    ShortcutIconSpins[id] = nil
+    ShortcutIconBlinks[id] = nil
+    ShortcutIconPulses[id] = nil
+end
+
+local function registerIconAnim(sc, iconInst)
+    local id = sc.data.id
+    unregisterIconAnim(sc)
+    local anim = sc.cfg.imageAnim
+    if not iconInst or anim == "none" or not anim then
+        if iconInst then
+            pcall(function() iconInst.Rotation = 0 end)
+            pcall(function() iconInst.ImageTransparency = 0 end)
+        end
+        return
+    end
+    local speed = math.clamp(tonumber(sc.cfg.imageAnimSpeed) or 1, 0.1, 8)
+    if anim == "spin" then
+        ShortcutIconSpins[id] = {inst = iconInst, speed = speed * 90} -- grados/seg
+    elseif anim == "blink" then
+        ShortcutIconBlinks[id] = {inst = iconInst, speed = speed * 0.6}
+    elseif anim == "pulse" then
+        local scaleInst = iconInst:FindFirstChildOfClass("UIScale") or create("UIScale", {Scale = 1}, iconInst)
+        ShortcutIconPulses[id] = {inst = iconInst, scale = scaleInst, speed = speed * 0.7}
+    end
 end
 
 -- 📐 Preview del modal: escala la forma para que NUNCA se salga del recuadro
@@ -5249,15 +5432,11 @@ local function refreshShortcutVisual(sc)
         -- TextColor3 se deja blanco neutro (el UIGradient multiplica sobre él).
         sc.label.TextColor3 = isOn and Color3.new(1, 1, 1) or lightenColor(CurrentTheme.TEXT_MUTED, 0.5)
         sc.label.Font = currentFontEnum()
-        -- 🩹 TextScaled maneja el tamaño real; solo actualizamos el techo (Max)
-        -- según el tamaño del botón para que no crezca de más al agrandarlo.
-        local sizeConstraint = sc.label:FindFirstChildOfClass("UITextSizeConstraint")
-        local maxSize = math.clamp(math.floor(sc.cfg.size * 0.24), 8, 14)
-        if sizeConstraint then
-            sizeConstraint.MaxTextSize = maxSize
-        else
-            create("UITextSizeConstraint", {MaxTextSize = maxSize, MinTextSize = 6}, sc.label)
-        end
+        -- 🩹 V5.9.8: el tamaño de letra correcto (y su centrado) ahora lo
+        -- resuelve layoutIcon() más abajo vía fitShortcutLabel — ese es el
+        -- único lugar que conoce el tamaño real de la caja de texto en cada
+        -- layout (con ícono, sin ícono, etc.), así que ya no hace falta tocar
+        -- ningún UITextSizeConstraint acá.
         pcall(function() sc.label.TextStrokeTransparency = 1 end)
         -- ✨ Pulso animado en el texto: SOLO mientras el shortcut está en ON.
         -- Apagado, la letra se queda estática (tal como pediste) — solo el
@@ -5332,6 +5511,9 @@ local function destroyShortcut(id)
     ShortcutBorderAnims[id] = nil
     ShortcutLabelPulses[id] = nil
     ShortcutLabelWaves[id] = nil
+    ShortcutIconSpins[id] = nil
+    ShortcutIconBlinks[id] = nil
+    ShortcutIconPulses[id] = nil
     Shortcuts[id] = nil
 end
 
@@ -5399,14 +5581,12 @@ local function createFloating(sc)
         TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Center,
         TextYAlignment = Enum.TextYAlignment.Center,
-        -- 🩹 Fix premium: antes el TextSize era fijo, así que textos largos
-        -- ("UI Animation: ON") se salían del botón y quedaban cortados.
-        -- TextScaled + el UITextSizeConstraint de abajo dejan que el texto se
-        -- achique automáticamente hasta caber completo (incluyendo el ON/OFF),
-        -- sin agrandarse de más en botones grandes gracias al MaxTextSize.
-        TextScaled = true
+        -- 🩹 V5.9.8: ya NO usamos TextScaled (ver el comentario grande sobre
+        -- fitShortcutLabel más arriba en el archivo — esa combinación era la
+        -- causa del texto descentrado/"más abajo" que reportaste). El tamaño
+        -- real se calcula y asigna abajo, en layoutIcon() → fitShortcutLabel.
+        TextScaled = false
     }, frame)
-    create("UITextSizeConstraint", {MaxTextSize = math.clamp(math.floor(sc.cfg.size * 0.24), 8, 14), MinTextSize = 6}, label)
     -- 🌊 Degradado de "ola" del texto: solo se enciende cuando el shortcut está
     -- en ON (refreshShortcutVisual lo activa/desactiva). Apagado no cuesta nada.
     local labelGradient = create("UIGradient", {
@@ -5419,16 +5599,24 @@ local function createFloating(sc)
     -- KillerHub:CreateFloatingButton. Un shortcut "normal" (toggle/button de un
     -- Tab) nunca trae sc.data.image, así que para todos ellos esto es un único
     -- chequeo de campo nil y no agrega ningún Instance ni costo extra.
+    -- 🩹 V5.9.8: layoutIcon ahora también (a) llama a fitShortcutLabel con las
+    -- dimensiones REALES de la caja de texto de cada layout (con ícono, sin
+    -- ícono) — arregla el centrado — y (b) aplica el tinte de color y
+    -- registra/desregistra la animación del ícono (spin/blink/pulse) según
+    -- sc.cfg.imageAnim.
     local icon
     local function layoutIcon()
         if icon then icon:Destroy() icon = nil end
         local img = sc.data.image
+        local frameW, frameH = computeSizePx(sc.cfg)
         if img and img ~= "" then
             local hasText = sc.data.name and sc.data.name ~= ""
+            local tint = sc.cfg.imageColor
             icon = create("ImageLabel", {
                 Name = "Icon",
                 BackgroundTransparency = 1,
                 Image = img,
+                ImageColor3 = (type(tint) == "table") and Color3.new(tint[1] or 1, tint[2] or 1, tint[3] or 1) or Color3.new(1, 1, 1),
                 ScaleType = Enum.ScaleType.Fit,
                 ZIndex = 12
             }, frame)
@@ -5441,6 +5629,7 @@ local function createFloating(sc)
                 label.Visible = true
                 label.Size = UDim2.new(1, -10, 0.40, 0)
                 label.Position = UDim2.new(0, 5, 0.58, 0)
+                fitShortcutLabel(label, frameW - 10, frameH * 0.40, sc.cfg.size * 0.20)
             else
                 -- Sin texto: el ícono ocupa todo el botón (menos un margen).
                 icon.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -5448,10 +5637,13 @@ local function createFloating(sc)
                 icon.Size = UDim2.new(1, -14, 1, -14)
                 label.Visible = false
             end
+            registerIconAnim(sc, icon)
         else
             label.Visible = true
             label.Size = UDim2.new(1, -10, 1, -8)
             label.Position = UDim2.new(0, 5, 0, 4)
+            fitShortcutLabel(label, frameW - 10, frameH - 8, sc.cfg.size * 0.24)
+            unregisterIconAnim(sc)
         end
         sc.icon = icon
     end
@@ -5565,6 +5757,7 @@ local function setShortcutActive(sc, active)
         ShortcutBorderAnims[sc.data.id] = nil
         ShortcutLabelPulses[sc.data.id] = nil
         ShortcutLabelWaves[sc.data.id] = nil
+        unregisterIconAnim(sc)
     end
     if ShortcutActivators[sc.data.id] and ShortcutActivators[sc.data.id].refresh then
         ShortcutActivators[sc.data.id].refresh()
@@ -6171,7 +6364,7 @@ function KillerHub._AttachShortcut(hostFrame, data)
 end
 
 -- ============================================================================
--- 🆕 V5.9.7 · KillerHub:CreateFloatingButton — API pública de botones flotantes
+-- 🆕 V5.9.8 · KillerHub:CreateFloatingButton — API pública de botones flotantes
 -- ----------------------------------------------------------------------------
 -- Crea un botón "shortcut" (idéntico visualmente a los que salen del ícono
 -- activador ↖ de un Toggle/Button de un Tab) sin necesitar ningún control real
@@ -6182,7 +6375,10 @@ end
 -- giratorio, ola en el texto, drag multi-touch, grid automático al activarse,
 -- guardado de posición/forma/tamaño por id) → visualmente y en performance es
 -- el mismo camino de código que ya usan los shortcuts normales, cero motor
--- nuevo que mantener.
+-- nuevo que mantener. Lo mismo aplica a lo nuevo de esta versión (animación de
+-- ícono): usa la ÚNICA Heartbeat compartida de la librería, no crea threads ni
+-- conexiones nuevas por botón — pensado para no pegar en gama baja aunque
+-- tengas varios botones animados en pantalla a la vez.
 --
 -- local btn = KillerHub:CreateFloatingButton({
 --     id          = "sky_toggle",        -- string único y estable. Volver a
@@ -6194,6 +6390,11 @@ end
 --     visible     = true,                 -- opcional, default true
 --     shape       = "square",             -- "square" | "rounded" | "circle"
 --     size        = 48,                   -- 20-100 px, igual que un shortcut
+--     opacity     = 0.85,                 -- 🆕 0-1, opacidad del fondo
+--     lock        = false,                -- 🆕 true = el jugador no puede arrastrarlo
+--     imageColor  = Color3.fromRGB(255,255,255), -- 🆕 tinte del ícono, opcional
+--     imageAnimation      = "spin",       -- 🆕 "none" | "spin" | "blink" | "pulse"
+--     imageAnimationSpeed = 1,            -- 🆕 0.1-8, multiplicador de velocidad
 --     cooldown    = 5,                    -- opcional: segundos bloqueado tras
 --                                          -- un click, con cuenta regresiva
 --                                          -- EN VIVO en el propio texto
@@ -6204,11 +6405,20 @@ end
 -- })
 --
 -- Handle devuelto:
---   handle:SetText("Nuevo texto")   handle:SetImage("rbxassetid://456")
+--   handle:SetText("Nuevo texto")        handle:SetImage("rbxassetid://456")
+--   handle:SetSize(64)                   handle:SetShape("circle")
+--   handle:SetOpacity(1)                 handle:SetLocked(true)
+--   handle:SetImageColor(Color3.fromRGB(255,80,80))  -- o nil para quitar el tinte
+--   handle:SetImageAnimation("blink", 1.5)           -- kind, speed opcional
 --   handle:Show()  handle:Hide()    handle:Fire()  -- dispara onClick a mano
 --   handle:OpenSettings()  -- abre el MISMO modal (forma/tamaño/opacidad/lock/
---                              keybind) que usan los shortcuts normales
+--                              keybind) que usan los shortcuts normales — y
+--                              donde el JUGADOR también puede reajustar todo
+--                              eso a mano con los sliders/botones ya existentes
 --   handle:Destroy()        -- lo saca de pantalla y libera sus conexiones
+--
+-- Todos los Set* devuelven `self`, así que se pueden encadenar:
+--   btn:SetShape("circle"):SetSize(64):SetImageAnimation("spin", 2)
 -- ============================================================================
 KillerHub._CustomButtons = KillerHub._CustomButtons or {}
 
@@ -6231,6 +6441,12 @@ function KillerHub:CreateFloatingButton(opts)
     if existing then
         existing:SetText(opts.text)
         if opts.image ~= nil then existing:SetImage(opts.image) end
+        if opts.shape ~= nil then existing:SetShape(opts.shape) end
+        if opts.size ~= nil then existing:SetSize(opts.size) end
+        if opts.opacity ~= nil then existing:SetOpacity(opts.opacity) end
+        if opts.lock ~= nil then existing:SetLocked(opts.lock) end
+        if opts.imageColor ~= nil then existing:SetImageColor(opts.imageColor) end
+        if opts.imageAnimation ~= nil then existing:SetImageAnimation(opts.imageAnimation, opts.imageAnimationSpeed) end
         existing._onClick = opts.onClick
         existing._cooldown = opts.cooldown
         existing._cooldownText = opts.cooldownText
@@ -6248,6 +6464,21 @@ function KillerHub:CreateFloatingButton(opts)
     end
     if type(opts.size) == "number" then
         cfg.size = math.clamp(math.floor(opts.size), 20, 100)
+    end
+    if type(opts.opacity) == "number" then
+        cfg.opacity = math.clamp(opts.opacity, 0, 1)
+    end
+    if opts.lock ~= nil then
+        cfg.lock = opts.lock and true or false
+    end
+    if typeof(opts.imageColor) == "Color3" then
+        cfg.imageColor = {opts.imageColor.R, opts.imageColor.G, opts.imageColor.B}
+    end
+    if opts.imageAnimation == "none" or opts.imageAnimation == "spin" or opts.imageAnimation == "blink" or opts.imageAnimation == "pulse" then
+        cfg.imageAnim = opts.imageAnimation
+    end
+    if type(opts.imageAnimationSpeed) == "number" then
+        cfg.imageAnimSpeed = math.clamp(opts.imageAnimationSpeed, 0.1, 8)
     end
 
     -- ⚡ Cooldown: un solo task.spawn con task.wait(1) por botón, y SOLO
@@ -6328,6 +6559,75 @@ function KillerHub:CreateFloatingButton(opts)
     function handle:SetImage(imageId)
         data.image = (type(imageId) == "string" and imageId ~= "") and imageId or nil
         if sc.frame then refreshShortcutVisual(sc) end
+        return self
+    end
+
+    -- 🆕 V5.9.8 · Personalización completa desde código (además de los
+    -- sliders/formas que ya podías tocar a mano con handle:OpenSettings()).
+    -- Todas devuelven `self` para poder encadenarlas:
+    --   btn:SetSize(64):SetShape("circle"):SetOpacity(1)
+
+    -- Tamaño en píxeles (20-100, igual rango que el modal de ajustes).
+    function handle:SetSize(px)
+        if type(px) ~= "number" then return self end
+        cfg.size = math.clamp(math.floor(px), 20, 100)
+        if sc.frame then refreshShortcutVisual(sc) end
+        saveShortcuts()
+        return self
+    end
+
+    -- Opacidad del fondo del botón, 0 (invisible) a 1 (sólido).
+    function handle:SetOpacity(alpha)
+        if type(alpha) ~= "number" then return self end
+        cfg.opacity = math.clamp(alpha, 0, 1)
+        if sc.frame then refreshShortcutVisual(sc) end
+        saveShortcuts()
+        return self
+    end
+
+    -- Forma del botón: "square" | "rounded" | "circle".
+    function handle:SetShape(shape)
+        if shape ~= "square" and shape ~= "rounded" and shape ~= "circle" then return self end
+        cfg.shape = shape
+        if sc.frame then refreshShortcutVisual(sc) end
+        saveShortcuts()
+        return self
+    end
+
+    -- Bloquea/desbloquea el arrastre del botón (igual que el switch "Lock
+    -- position" del modal de ajustes).
+    function handle:SetLocked(locked)
+        cfg.lock = locked and true or false
+        saveShortcuts()
+        return self
+    end
+
+    -- Tinte de color sobre la imagen (Color3), o nil para quitarlo (blanco =
+    -- color original del ícono).
+    function handle:SetImageColor(color3)
+        if color3 == nil then
+            cfg.imageColor = nil
+        elseif typeof(color3) == "Color3" then
+            cfg.imageColor = {color3.R, color3.G, color3.B}
+        else
+            return self
+        end
+        if sc.frame then refreshShortcutVisual(sc) end
+        saveShortcuts()
+        return self
+    end
+
+    -- Anima la imagen del botón. kind: "none" | "spin" | "blink" | "pulse".
+    -- speed es un multiplicador opcional (0.1 a 8, default 1 = velocidad
+    -- normal; 2 = el doble de rápido, 0.5 = la mitad, etc.).
+    function handle:SetImageAnimation(kind, speed)
+        if kind ~= "none" and kind ~= "spin" and kind ~= "blink" and kind ~= "pulse" then return self end
+        cfg.imageAnim = kind
+        if speed ~= nil and type(speed) == "number" then
+            cfg.imageAnimSpeed = math.clamp(speed, 0.1, 8)
+        end
+        if sc.frame then refreshShortcutVisual(sc) end
+        saveShortcuts()
         return self
     end
 
@@ -6425,6 +6725,7 @@ table.insert(KillerHub.TargetThemeElements, function()
         if sc.frame and sc.cfg.active then
             pcall(function() sc.frame:Destroy() end)
             sc.frame, sc.stroke, sc.label, sc.accentBar = nil, nil, nil, nil
+            unregisterIconAnim(sc) -- createFloating() la vuelve a registrar si corresponde
             createFloating(sc)
             refreshShortcutVisual(sc)
         end
@@ -7353,7 +7654,7 @@ local KHC = {   -- constantes del panel privado (agrupadas: limite de 200 locals
     KH_ANALYTICS_URL = "https://project--e9d15026-4081-4e74-a34f-79f6f3fea1cd-dev.lovable.app/api/public/kh",
     KH_OWNER_KEY     = "killerhub-panel-2026",
     KH_PING_INTERVAL = 20,
-    KH_VERSION       = "5.9.7",
+    KH_VERSION       = "5.9.8",
     KH_ICON_USER     = "rbxassetid://81489458260315",
     KH_ICON_CLOSE    = "rbxassetid://82994774214203",
 }
