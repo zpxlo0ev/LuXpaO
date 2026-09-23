@@ -567,12 +567,36 @@ local Themes = {
         TEXT_MUTED = Color3.fromRGB(140, 100, 100),
         BORDER = Color3.fromRGB(65, 10, 10),
         GLOW = Color3.fromRGB(255, 70, 70)
+    },
+    -- 🆕 "Custom": tema en blanco (arranca como copia de Obsidian) que el
+    -- jugador repinta campo por campo desde Settings → Customize UI. Vive
+    -- como una entrada MÁS de Themes, así que hereda gratis TODO el motor de
+    -- temas ya existente (cascada a botones/bordes/shortcuts/dropdowns) sin
+    -- código nuevo que mantener aparte.
+    ["Custom"] = {
+        BG_MAIN = Color3.fromRGB(10, 7, 16),
+        BG_SIDEBAR = Color3.fromRGB(7, 5, 12),
+        BG_SECONDARY = Color3.fromRGB(17, 12, 26),
+        ACCENT = Color3.fromRGB(93, 38, 168),
+        PREMIUM_GOLD = Color3.fromRGB(255, 196, 0),
+        TEXT_WHITE = Color3.fromRGB(244, 238, 255),
+        TEXT_MUTED = Color3.fromRGB(148, 134, 172),
+        BORDER = Color3.fromRGB(38, 14, 72),
+        GLOW = Color3.fromRGB(122, 58, 205)
     }
 }
 
 local CurrentTheme = Themes["Obsidian"]
 -- Forward ref: the shortcuts ScreenGui lives further down but SetTheme needs it.
 local ShortcutScreenRef = nil
+-- 🆕 Customize UI: cuando el jugador arrastra un color picker del tema
+-- "Custom", en vez de repintar TODA la UI en cada evento de arrastre (podría
+-- disparar cientos de veces por segundo con mouse/touch de alto polling) solo
+-- se marca esta bandera. La ÚNICA Heartbeat compartida de la libreria
+-- (_borderAnimStep, mas abajo) la consume como maximo una vez por frame real
+-- y la apaga -> el repintado nunca cuesta mas que un cambio de tema normal,
+-- sin importar que tan rapido se mueva el color picker.
+local CustomThemeDirty = false
 
 -- 📂 CARPETA DEDICADA: aísla el JSON de esta librería de cualquier otro script
 -- que también autoguarde (incluso si ese script usa un nombre genérico tipo
@@ -1315,9 +1339,22 @@ create("UIGradient", {
 -- congelar el hilo principal: la descarga corre en task.spawn, y un "token"
 -- descarta el resultado si el usuario cambió de tema/opción mientras tanto.
 local backgroundResolveToken = 0
+-- 🖼️ V5.9.9 · Fondo personalizado por rbxassetid (Customize UI ▸ "Add
+-- background with ID"): si el jugador cargó un ID, ese SIEMPRE gana sobre el
+-- wallpaper del tema — así, sin importar qué tema tenga activo, el fondo
+-- elegido a mano no se pierde. Solo IDs de recursos 2D (Decal/Image) sirven
+-- acá; un ID de modelo/mesh no tiene nada que ImageLabel pueda mostrar y
+-- simplemente no carga nada (no rompe la librería).
+local function getEffectiveBackgroundSource()
+    local customId = Config.CustomBackgroundId
+    if type(customId) == "string" and customId ~= "" then
+        return "rbxassetid://" .. customId
+    end
+    return ThemeBackgroundImages[Config.SelectedTheme] or ""
+end
+
 local function updateBackgroundImage()
-    local theme = Config.SelectedTheme
-    local rawSource = ThemeBackgroundImages[theme] or ""
+    local rawSource = getEffectiveBackgroundSource()
     local shouldShow = (Config.BackgroundEnabled == true) and rawSource ~= ""
 
     backgroundResolveToken = backgroundResolveToken + 1
@@ -1339,7 +1376,10 @@ local function updateBackgroundImage()
         end
         MainBackgroundImage.Image = resolved
         MainBackgroundImage.ImageTransparency = 1 - (Config.UiOpacity or 0.75)
-        local show = (Config.BackgroundEnabled == true) and (ThemeBackgroundImages[Config.SelectedTheme] == rawSource)
+        -- 🩹 compara contra la fuente EFECTIVA actual (no solo la del tema),
+        -- si no, con un ID personalizado cargado esto nunca sería igual y el
+        -- fondo jamás se mostraría.
+        local show = (Config.BackgroundEnabled == true) and (getEffectiveBackgroundSource() == rawSource)
         MainBackgroundImage.Visible = show
         MainBackgroundScrim.BackgroundColor3 = CurrentTheme.BG_MAIN
         MainBackgroundScrim.BackgroundTransparency = math.clamp(0.45 + (1 - (Config.UiOpacity or 0.75)) * 0.5, 0, 0.95)
@@ -1669,6 +1709,16 @@ local ShortcutIconPulses = {} -- id -> {inst = ImageLabel, scale = UIScale, spee
 KHS._iconAnimT = 0
 
 local function _borderAnimStep(dt)
+    -- 🆕 Customize UI: aplica como MÁXIMO un repintado del tema "Custom" por
+    -- frame real, sin importar cuántos eventos de arrastre del color picker
+    -- llegaron desde el último frame. Corre ANTES de los early-return de
+    -- abajo para que el preview en vivo funcione incluso con UiLite activo.
+    if CustomThemeDirty then
+        CustomThemeDirty = false
+        if Config.SelectedTheme == "Custom" then
+            KillerHub:SetTheme("Custom")
+        end
+    end
     -- ⚡ UiLite: cero trabajo por frame (ni una comparación más allá de esta).
     if Config.UiLite then return end
     if not _animEnabled() then return end
@@ -3042,6 +3092,18 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
         BorderSizePixel = 0,
         Active = true
     }, MasterFrame)
+    -- 🩹 FIX parpadeo blanco/negro: si el color guardado coincide "por
+    -- casualidad" con un color del tema actual (p. ej. blanco puro para
+    -- TEXT_WHITE, o un gris muy oscuro para BORDER), create()/tagThemed lo
+    -- auto-etiqueta como "ThemeBG" creyendo que es un elemento estático del
+    -- tema. El próximo repintado de tema (que se dispara en CADA frame
+    -- mientras se arrastra cualquier color picker de Customize UI, vía
+    -- CustomThemeDirty) pisaba entonces Canvas.BackgroundColor3 con ese color
+    -- de tema fijo en vez de dejar el tinte de matiz en vivo — de ahí el
+    -- parpadeo a solo blanco/negro. El color de este canvas SIEMPRE lo
+    -- controla paintVisuals() más abajo, así que nunca debe quedar bajo el
+    -- sistema de auto-repintado por tema.
+    Canvas:SetAttribute("ThemeBG", nil)
     create("UICorner", {CornerRadius = UDim.new(0, 10)}, Canvas)
     create("UIStroke", {Thickness = 1, Color = Color3.fromRGB(45, 45, 50)}, Canvas)
 
@@ -3085,6 +3147,9 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
         Size = UDim2.new(0, 58, 0, 58),
         BackgroundColor3 = savedColor
     }, InfoColumn)
+    -- 🩹 Mismo fix que el Canvas de arriba: el swatch de preview también lo
+    -- pinta paintVisuals() en vivo, así que no debe quedar auto-etiquetado.
+    PreviewFrame:SetAttribute("ThemeBG", nil)
     create("UICorner", {CornerRadius = UDim.new(0, 10)}, PreviewFrame)
     create("UIStroke", {Thickness = 1.5, Color = Color3.fromRGB(55, 55, 62), Transparency = 0.1}, PreviewFrame)
 
@@ -3178,6 +3243,12 @@ local function BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColo
         HueKnob.Position = UDim2.new(0.5, -10, h, -2)
         Canvas.BackgroundColor3 = color3FromHSV(h, 1, 1)
         PreviewFrame.BackgroundColor3 = col
+        -- 🩹 Mismo patrón que setSwatchColor (abajo, para ColorBtn): además de
+        -- pintar, nos aseguramos de que ningún repintado de tema anterior haya
+        -- dejado a Canvas/PreviewFrame "enganchados" a un color de tema. Barato
+        -- (dos SetAttribute) y a prueba de que algo los vuelva a etiquetar.
+        pcall(function() Canvas:SetAttribute("ThemeBG", nil) end)
+        pcall(function() PreviewFrame:SetAttribute("ThemeBG", nil) end)
         setSwatchColor(ColorBtn, col)
         if not HexBox:IsFocused() then
             HexBox.Text = stringFormat("#%02X%02X%02X", mathRound(col.R * 255), mathRound(col.G * 255), mathRound(col.B * 255))
@@ -4474,6 +4545,7 @@ function TabMethods:CreateToggleColorPicker(flagToggle, flagColor, text, default
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, Knob)
 
     local ColorBtn = create("TextButton", {Size = UDim2.new(0, 26, 0, 18), Position = UDim2.new(1, -38, 0, 9), BackgroundColor3 = savedColor, Text = ""}, MasterFrame)
+    ColorBtn:SetAttribute("ThemeBG", nil) -- 🩹 mismo fix del flicker: este swatch lo pinta setSwatchColor(), no el tema
     create("UICorner", {CornerRadius = UDim.new(0, 7)}, ColorBtn)
 
     local Panel = BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColor, 44, function(col)
@@ -4551,6 +4623,7 @@ function TabMethods:CreateColorPicker(flagColor, text, defaultColor, callback)
     local Label = create("TextLabel", {Size = UDim2.new(1, -60, 1, 0), Position = UDim2.new(0, 12, 0, 0), BackgroundTransparency = 1, Text = text, TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left}, Trigger)
     
     local ColorBtn = create("TextButton", {Size = UDim2.new(0, 30, 0, 18), Position = UDim2.new(1, -42, 0.5, -9), BackgroundColor3 = savedColor, Text = ""}, Trigger)
+    ColorBtn:SetAttribute("ThemeBG", nil) -- 🩹 mismo fix del flicker: este swatch lo pinta setSwatchColor(), no el tema
     create("UICorner", {CornerRadius = UDim.new(0, 7)}, ColorBtn)
 
     local Panel = BuildColorPickerPanel(MasterFrame, ColorBtn, flagColor, savedColor, 44, function(col)
@@ -6402,6 +6475,20 @@ end
 --         return "Wait " .. secondsLeft .. "s"
 --     end,
 --     onClick     = function(handle) ... end,
+--
+--     -- 🆕 V5.9.9 · Click avanzado (todo opcional, nada de esto rompe lo de
+--     -- arriba: un botón sin ninguno de estos campos se comporta EXACTO
+--     -- igual que antes):
+--     onDoubleClick = function(handle) ... end, -- ADEMÁS de onClick, no en vez de
+--     doubleClickTime = 0.35,             -- segundos entre clicks para contar como doble
+--     singleUse   = false,                -- true = se desactiva después del 1er click
+--     maxClicks   = nil,                  -- número: se desactiva al llegar a esta cantidad
+--     usedImage   = "rbxassetid://789",   -- ícono opcional al quedar "gastado"
+--     usedText    = "Used",               -- texto opcional al quedar "gastado"
+--     images      = {"rbxassetid://1", "rbxassetid://2"}, -- rota una imagen por click
+--     showCounter = false,                -- true = agrega "[n]" de clicks al texto
+--     counterText = function(n) return n.."/5" end, -- formato propio del contador
+--     resetOn     = {"respawn", "death"}, -- reinicia contador/imagen/estado solo con la vida
 -- })
 --
 -- Handle devuelto:
@@ -6417,10 +6504,49 @@ end
 --                              eso a mano con los sliders/botones ya existentes
 --   handle:Destroy()        -- lo saca de pantalla y libera sus conexiones
 --
+--   -- 🆕 V5.9.9
+--   handle:GetClickCount()               handle:IsUsedUp()
+--   handle:ResetClicks()                 -- reinicia contador/imagen/estado a mano
+--   handle:SetSingleUse(true)            handle:SetMaxClicks(5)
+--   handle:SetImages({"rbxassetid://1", "rbxassetid://2"})
+--   handle:SetUsedImage("rbxassetid://789")   handle:SetUsedText("Used")
+--   handle:SetDoubleClickTime(0.3)       handle:OnDoubleClick(function(h) ... end)
+--   handle:SetShowCounter(true)          handle:SetResetOn({"respawn","death"})
+--
 -- Todos los Set* devuelven `self`, así que se pueden encadenar:
 --   btn:SetShape("circle"):SetSize(64):SetImageAnimation("spin", 2)
+--   btn:SetSingleUse(true):SetResetOn({"respawn","death"}):SetShowCounter(true)
 -- ============================================================================
 KillerHub._CustomButtons = KillerHub._CustomButtons or {}
+
+-- 🆕 V5.9.9 · Reset por respawn/muerte de TODOS los botones flotantes que lo
+-- pidan (opts.resetOn). Una sola conexión CharacterAdded + una Humanoid.Died
+-- por vida, sin importar cuántos botones existan — igual filosofía que el
+-- resto de la libreria (1 conexión compartida, nada por botón). Se conecta
+-- perezosamente: si ningún botón usa resetOn, esto nunca se ejecuta.
+local _khFBHooksInit = false
+local function _khFireFBResetEvent(kind)
+    for _, h in pairs(KillerHub._CustomButtons) do
+        if h._resetOn and h._resetOn[kind] then
+            safeCall("CreateFloatingButton.resetOn", h.ResetClicks, h)
+        end
+    end
+end
+local function _khEnsureFBCharacterHooks()
+    if _khFBHooksInit then return end
+    _khFBHooksInit = true
+    local function hookCharacter(char)
+        local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+        if hum then
+            connect(hum.Died, function() _khFireFBResetEvent("death") end)
+        end
+    end
+    if LocalPlayer.Character then hookCharacter(LocalPlayer.Character) end
+    connect(LocalPlayer.CharacterAdded, function(char)
+        _khFireFBResetEvent("respawn")
+        hookCharacter(char)
+    end)
+end
 
 function KillerHub:CreateFloatingButton(opts)
     opts = opts or {}
@@ -6450,6 +6576,16 @@ function KillerHub:CreateFloatingButton(opts)
         existing._onClick = opts.onClick
         existing._cooldown = opts.cooldown
         existing._cooldownText = opts.cooldownText
+        -- 🆕 V5.9.9
+        existing._onDoubleClick = opts.onDoubleClick
+        if opts.doubleClickTime ~= nil then existing:SetDoubleClickTime(opts.doubleClickTime) end
+        if opts.singleUse ~= nil then existing:SetSingleUse(opts.singleUse) end
+        if opts.maxClicks ~= nil then existing:SetMaxClicks(opts.maxClicks) end
+        if opts.images ~= nil then existing:SetImages(opts.images) end
+        if opts.usedImage ~= nil then existing._usedImage = opts.usedImage end
+        if opts.usedText ~= nil then existing._usedText = opts.usedText end
+        if opts.showCounter ~= nil or opts.counterText ~= nil then existing:SetShowCounter(opts.showCounter, opts.counterText) end
+        if opts.resetOn ~= nil then existing:SetResetOn(opts.resetOn) end
         if opts.visible == false then
             existing:Hide()
         elseif opts.visible == true or not existing._everShown then
@@ -6481,6 +6617,20 @@ function KillerHub:CreateFloatingButton(opts)
         cfg.imageAnimSpeed = math.clamp(opts.imageAnimationSpeed, 0.1, 8)
     end
 
+    -- 🆕 V5.9.9 · Estado de click (contador, doble click, un solo uso, ciclo
+    -- de imágenes, reset por respawn/muerte). Todo vive en variables locales
+    -- del closure -> cero instancias/conexiones nuevas por botón salvo el
+    -- reset de personaje, que además es UNA sola conexión compartida para
+    -- TODOS los botones (ver _khEnsureFBCharacterHooks arriba).
+    local clickCount = 0
+    local lastClickAt = 0
+    local usedUp = false
+    local imageList, imageIndex = {}, 0
+    if type(opts.images) == "table" and #opts.images > 0 then
+        imageList = opts.images
+        imageIndex = 1
+    end
+
     -- ⚡ Cooldown: un solo task.spawn con task.wait(1) por botón, y SOLO
     -- mientras hay cuenta regresiva activa (se auto-termina al llegar a 0).
     -- cooldownGen invalida loops viejos si se re-dispara antes de terminar
@@ -6499,7 +6649,17 @@ function KillerHub:CreateFloatingButton(opts)
             end
             return string.format("%s (%ds)", handle._text or "", remaining)
         end
-        return handle._text or ""
+        local base = (usedUp and handle._usedText) and handle._usedText or (handle._text or "")
+        -- 🆕 V5.9.9 · Contador de clicks opcional en el propio texto.
+        if handle._showCounter then
+            local fn = handle._counterText
+            if type(fn) == "function" then
+                local ok, txt = pcall(fn, clickCount)
+                if ok and type(txt) == "string" then return txt end
+            end
+            return string.format("%s [%d]", base, clickCount)
+        end
+        return base
     end
 
     local function startCooldown(seconds)
@@ -6530,9 +6690,43 @@ function KillerHub:CreateFloatingButton(opts)
         getLabel = currentLabel,
         fire = function()
             if coolingDown then return end -- click ignorado durante la cuenta regresiva
+            if usedUp then return end -- 🆕 botón de un solo uso / límite de clicks ya alcanzado
+
+            -- 🆕 V5.9.9 · Doble click: NO reemplaza a onClick (retrocompatible:
+            -- todo script que solo usa onClick sigue funcionando exactamente
+            -- igual). Si el click llega dentro de la ventana de doble click,
+            -- ADEMÁS se dispara onDoubleClick.
+            local now = os.clock()
+            local isDoubleClick = (now - lastClickAt) <= (handle._doubleClickWindow or 0.35)
+            lastClickAt = now
+            clickCount = clickCount + 1
+
             safeCall("CreateFloatingButton.onClick", handle._onClick, handle)
+            if isDoubleClick and handle._onDoubleClick then
+                safeCall("CreateFloatingButton.onDoubleClick", handle._onDoubleClick, handle)
+            end
+
+            -- 🆕 Ciclo de imágenes: avanza una imagen por click si se dio
+            -- una lista con :SetImages()/opts.images.
+            if #imageList > 0 then
+                imageIndex = (imageIndex % #imageList) + 1
+                data.image = imageList[imageIndex]
+            end
+
+            -- 🆕 Un solo uso / límite de clicks: se desactiva el botón
+            -- (ignora clicks) hasta el próximo :ResetClicks() manual o
+            -- automático por respawn/muerte (opts.resetOn).
+            local hitLimit = (type(handle._maxClicks) == "number") and (clickCount >= handle._maxClicks)
+            if handle._singleUse or hitLimit then
+                usedUp = true
+                if handle._usedImage then data.image = handle._usedImage end
+            end
+
+            if sc.frame then refreshShortcutVisual(sc) end
+            if sc.frame and sc.label then sc.label.Text = currentLabel() end
+
             local cd = handle._cooldown
-            if type(cd) == "number" and cd > 0 then startCooldown(cd) end
+            if type(cd) == "number" and cd > 0 and not usedUp then startCooldown(cd) end
         end,
     }
 
@@ -6546,7 +6740,27 @@ function KillerHub:CreateFloatingButton(opts)
         _cooldown = opts.cooldown,
         _cooldownText = opts.cooldownText,
         _everShown = false,
+        -- 🆕 V5.9.9
+        _onDoubleClick = opts.onDoubleClick,
+        _doubleClickWindow = (type(opts.doubleClickTime) == "number") and math.clamp(opts.doubleClickTime, 0.1, 2) or 0.35,
+        _singleUse = opts.singleUse and true or false,
+        _maxClicks = (type(opts.maxClicks) == "number") and math.max(1, math.floor(opts.maxClicks)) or nil,
+        _usedImage = (type(opts.usedImage) == "string" and opts.usedImage ~= "") and opts.usedImage or nil,
+        _usedText = (type(opts.usedText) == "string") and opts.usedText or nil,
+        _showCounter = opts.showCounter and true or false,
+        _counterText = (type(opts.counterText) == "function") and opts.counterText or nil,
+        _resetOn = {},
     }
+    if opts.resetOn ~= nil then
+        local list = opts.resetOn
+        if type(list) == "string" then list = {list} end
+        if type(list) == "table" then
+            for _, ev in ipairs(list) do
+                if ev == "respawn" or ev == "death" then handle._resetOn[ev] = true end
+            end
+        end
+        if next(handle._resetOn) then _khEnsureFBCharacterHooks() end
+    end
 
     function handle:SetText(text)
         if type(text) ~= "string" then return self end
@@ -6628,6 +6842,126 @@ function KillerHub:CreateFloatingButton(opts)
         end
         if sc.frame then refreshShortcutVisual(sc) end
         saveShortcuts()
+        return self
+    end
+
+    -- ========================================================================
+    -- 🆕 V5.9.9 · Click avanzado: contador, doble click, un solo uso, límite
+    -- de clicks, ciclo de imágenes y reset automático por respawn/muerte.
+    -- Todas encadenables, igual que el resto.
+    -- ========================================================================
+
+    -- Cuántas veces se disparó onClick desde el último reset.
+    function handle:GetClickCount()
+        return clickCount
+    end
+
+    -- true si el botón está "gastado" (un solo uso o llegó a maxClicks).
+    function handle:IsUsedUp()
+        return usedUp
+    end
+
+    -- Reinicia contador, reactiva el botón y vuelve a la primera imagen del
+    -- ciclo (o a la imagen original si no hay lista). Se llama sola en
+    -- respawn/muerte si el botón pidió opts.resetOn, y también se puede
+    -- llamar a mano en cualquier momento.
+    function handle:ResetClicks()
+        clickCount = 0
+        lastClickAt = 0
+        usedUp = false
+        if #imageList > 0 then
+            imageIndex = 1
+            data.image = imageList[1]
+        elseif opts.image ~= nil then
+            data.image = opts.image
+        end
+        if sc.frame then refreshShortcutVisual(sc) end
+        if sc.frame and sc.label then sc.label.Text = currentLabel() end
+        return self
+    end
+
+    -- true = el botón deja de responder clicks después del primero, hasta
+    -- el próximo :ResetClicks().
+    function handle:SetSingleUse(enabled)
+        self._singleUse = enabled and true or false
+        return self
+    end
+
+    -- Desactiva el botón automáticamente al llegar a n clicks. nil quita el
+    -- límite (solo queda activo si además es singleUse).
+    function handle:SetMaxClicks(n)
+        if n == nil then self._maxClicks = nil return self end
+        if type(n) ~= "number" then return self end
+        self._maxClicks = math.max(1, math.floor(n))
+        return self
+    end
+
+    -- Lista de imágenes que el botón va rotando una por click (vuelve a la
+    -- primera al llegar al final). nil o {} apaga el ciclo.
+    function handle:SetImages(list)
+        if list == nil then
+            imageList = {}
+            return self
+        end
+        if type(list) ~= "table" or #list == 0 then return self end
+        imageList = list
+        imageIndex = 1
+        data.image = imageList[1]
+        if sc.frame then refreshShortcutVisual(sc) end
+        return self
+    end
+
+    -- Imagen (y/o texto) que se muestra cuando el botón queda "gastado" por
+    -- singleUse/maxClicks. Pasa nil para volver al ícono/texto normal.
+    function handle:SetUsedImage(imageId)
+        self._usedImage = (type(imageId) == "string" and imageId ~= "") and imageId or nil
+        if usedUp and sc.frame then refreshShortcutVisual(sc) end
+        return self
+    end
+    function handle:SetUsedText(text)
+        self._usedText = (type(text) == "string") and text or nil
+        if usedUp and sc.frame and sc.label then sc.label.Text = currentLabel() end
+        return self
+    end
+
+    -- Ventana en segundos para considerar dos clicks seguidos "doble click"
+    -- (0.1 a 2, default 0.35).
+    function handle:SetDoubleClickTime(seconds)
+        if type(seconds) ~= "number" then return self end
+        self._doubleClickWindow = math.clamp(seconds, 0.1, 2)
+        return self
+    end
+
+    -- Alternativa a opts.onDoubleClick para conectarlo después de crear el botón.
+    function handle:OnDoubleClick(fn)
+        if type(fn) ~= "function" then return self end
+        self._onDoubleClick = fn
+        return self
+    end
+
+    -- Muestra el contador de clicks pegado al texto del botón ("Texto [3]"),
+    -- o con tu propio formato: btn:SetShowCounter(true, function(n) return n.."/5" end)
+    function handle:SetShowCounter(enabled, formatFn)
+        self._showCounter = enabled and true or false
+        if formatFn ~= nil and type(formatFn) == "function" then
+            self._counterText = formatFn
+        end
+        if sc.frame and sc.label then sc.label.Text = currentLabel() end
+        return self
+    end
+
+    -- Qué eventos de vida reinician el botón solos: "respawn", "death", o
+    -- {"respawn","death"} para ambos. nil/{} apaga el reset automático.
+    function handle:SetResetOn(events)
+        local set = {}
+        if type(events) == "string" then events = {events} end
+        if type(events) == "table" then
+            for _, e in ipairs(events) do
+                if e == "respawn" or e == "death" then set[e] = true end
+            end
+        end
+        self._resetOn = set
+        if next(set) then _khEnsureFBCharacterHooks() end
         return self
     end
 
@@ -6855,11 +7189,168 @@ end
 
 -- ─────────────────────────────── GENERAL ───────────────────────────────
 SP.General:CreateSection("Look")
-SP.General:CreateDropdown("SelectedTheme", "Theme", {"Obsidian", "Void Premium", "Midnight Emerald", "Classic Dark", "Sakura Blossom", "Blood"}, function(selected)
+SP.General:CreateDropdown("SelectedTheme", "Theme", {"Obsidian", "Void Premium", "Midnight Emerald", "Classic Dark", "Sakura Blossom", "Blood", "Custom"}, function(selected)
     KillerHub:SetTheme(selected)
     if KillerHub.RefreshBorderStyle then KillerHub:RefreshBorderStyle() end
 end, "Obsidian")
-SP.General:CreateHint("Color scheme of the whole hub.")
+SP.General:CreateHint("Color scheme of the whole hub. Pick \"Custom\" to design your own.")
+
+-- 🆕 "Custom" theme → Customize UI: solo aparece cuando el tema activo es
+-- "Custom". Cada color picker de acá abajo escribe directo en
+-- Themes["Custom"][...] (la MISMA tabla que ya lee todo el resto de la
+-- libreria via CurrentTheme), así que colorea absolutamente todo lo que ya
+-- cae bajo el sistema de temas (ventana, sidebar, botones, bordes de
+-- shortcuts, dropdowns, etc.) sin ningún motor de pintado nuevo que mantener.
+do
+    local CUSTOM_FIELDS = {
+        {key = "BG_MAIN",      label = "Main background"},
+        {key = "BG_SIDEBAR",   label = "Sidebar background"},
+        {key = "BG_SECONDARY", label = "Panels background"},
+        {key = "ACCENT",       label = "Accent color"},
+        {key = "PREMIUM_GOLD", label = "Premium gold"},
+        {key = "TEXT_WHITE",   label = "Main text"},
+        {key = "TEXT_MUTED",   label = "Muted text"},
+        {key = "BORDER",       label = "Borders (buttons, shortcuts, panels)"},
+        {key = "GLOW",         label = "Glow / animated border"},
+    }
+
+    -- Botón "Customize UI": mismo estilo visual que un CreateButton normal,
+    -- pero hecho a mano para poder esconderlo/mostrarlo según el tema activo.
+    local OpenBtn = create("TextButton", {
+        Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = CurrentTheme.BG_SECONDARY, BackgroundTransparency = 0.3,
+        Text = "Customize UI", TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamBold, TextSize = 12,
+        ClipsDescendants = true, Visible = (Config.SelectedTheme == "Custom"),
+    }, SP.General.Frame)
+    OpenBtn:SetAttribute("ThemeRole", "BG_SECONDARY") OpenBtn:SetAttribute("CustomColorLabel", true)
+    create("UICorner", {CornerRadius = UDim.new(0, 10)}, OpenBtn)
+    create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, OpenBtn)
+    create("Frame", {Size = UDim2.new(1, 0, 0, 2), Position = UDim2.new(0, 0, 1, -2), BackgroundColor3 = CurrentTheme.ACCENT, BackgroundTransparency = 0.55, BorderSizePixel = 0, ZIndex = 2}, OpenBtn)
+    addInteractiveFeedback(OpenBtn)
+    SP.General:RegisterElement(OpenBtn, OpenBtn, SP.General.Frame.Name)
+
+    -- Se muestra/oculta cada vez que cambia el tema (el dropdown de arriba
+    -- ya llama KillerHub:SetTheme, que dispara TargetThemeElements).
+    table.insert(KillerHub.TargetThemeElements, function()
+        OpenBtn.Visible = (Config.SelectedTheme == "Custom")
+    end)
+
+    -- ── Overlay / modal (grande pero sin tapar toda la pantalla) ──────────
+    local Backdrop = create("TextButton", {
+        Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.45,
+        Text = "", AutoButtonColor = false, Visible = false, ZIndex = 300,
+    }, ScreenGui)
+
+    -- 📐 V5.9.9: panel más alto (0.66 → 0.86 de la pantalla) para que entren
+    -- más filas de color visibles a la vez sin tener que scrollear tanto,
+    -- pedido explícito del usuario. Se deja 0.06 de margen arriba/abajo para
+    -- no pegarse a los bordes de pantalla en resoluciones chicas.
+    local Panel = create("Frame", {
+        Size = UDim2.new(0.6, 0, 0.86, 0), Position = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = CurrentTheme.BG_MAIN, ZIndex = 301, Visible = false,
+    }, ScreenGui)
+    create("UICorner", {CornerRadius = UDim.new(0, 16)}, Panel)
+    local PanelStroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, Panel)
+
+    local Header = create("Frame", {Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1, ZIndex = 302}, Panel)
+    local PTitle = create("TextLabel", {
+        Size = UDim2.new(1, -56, 1, 0), Position = UDim2.new(0, 18, 0, 0), BackgroundTransparency = 1,
+        Text = "Customize UI", TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamBold, TextSize = 16,
+        TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 302,
+    }, Header)
+    local CloseBtn = create("TextButton", {
+        Size = UDim2.new(0, 30, 0, 30), Position = UDim2.new(1, -38, 0.5, -15), BackgroundColor3 = CurrentTheme.BG_SECONDARY,
+        Text = "X", TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 13, ZIndex = 302,
+    }, Header)
+    create("UICorner", {CornerRadius = UDim.new(0, 8)}, CloseBtn)
+    addInteractiveFeedback(CloseBtn)
+
+    local Hint = create("TextLabel", {
+        Size = UDim2.new(1, -36, 0, 20), Position = UDim2.new(0, 18, 0, 44), BackgroundTransparency = 1,
+        Text = "Pick a color for each part of the UI. Changes apply live.",
+        TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamMedium, TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 302,
+    }, Panel)
+
+    local Scroll = create("ScrollingFrame", {
+        Size = UDim2.new(1, -24, 1, -122), Position = UDim2.new(0, 12, 0, 70),
+        BackgroundTransparency = 1, ScrollBarThickness = 4, ScrollBarImageColor3 = CurrentTheme.ACCENT,
+        CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 302,
+    }, Panel)
+    create("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, Scroll)
+    create("UIPadding", {PaddingBottom = UDim.new(0, 6)}, Scroll)
+    setTabScrolling(Scroll, true)
+
+    local ResetBtn = create("TextButton", {
+        Size = UDim2.new(1, -24, 0, 34), Position = UDim2.new(0, 12, 1, -44),
+        BackgroundColor3 = Color3.fromRGB(48, 20, 24), Text = "Reset to default", TextColor3 = Color3.fromRGB(255, 180, 180),
+        Font = Enum.Font.GothamBold, TextSize = 12, AutoButtonColor = false, ZIndex = 302,
+    }, Panel)
+    create("UICorner", {CornerRadius = UDim.new(0, 8)}, ResetBtn)
+    create("UIStroke", {Thickness = 1, Color = Color3.fromRGB(120, 40, 45)}, ResetBtn)
+    addInteractiveFeedback(ResetBtn)
+
+    -- ── Un CreateColorPicker por cada rol de color (reusa TODO su motor:
+    -- rueda de color, modo RGB, persistencia en Config, repintado por tema) ──
+    local ProxyTab = setmetatable({Frame = Scroll, _isPage = false}, {__index = TabMethods})
+    local pickerObjs = {}
+    for _, field in ipairs(CUSTOM_FIELDS) do
+        local defaultColor = Themes["Obsidian"][field.key]
+        local cp = ProxyTab:CreateColorPicker("CustomTheme_" .. field.key, field.label, defaultColor, function(color)
+            Themes["Custom"][field.key] = color
+            CustomThemeDirty = true -- la Heartbeat compartida hace el repintado, máx. 1x por frame real
+        end)
+        pickerObjs[field.key] = cp
+    end
+
+    -- 🖼️ V5.9.9 · Nueva opción pedida: cargar un fondo custom pegando un
+    -- rbxassetid. Vive en la MISMA lista con scroll que los color pickers
+    -- (reusa ProxyTab), así que no hace falta ni un Instance nuevo a mano
+    -- para el layout — el UIListLayout de Scroll ya lo acomoda solo.
+    ProxyTab:CreateSection("Background image")
+    ProxyTab:CreateInput("CustomBackgroundId", "Add background with ID", "e.g. 123456789", function(rawId)
+        -- Acepta que peguen "rbxassetid://123", con espacios, etc. — se queda
+        -- solo con los dígitos para no guardar un ID mal formado.
+        local digits = tostring(rawId or ""):gsub("%D", "")
+        Config.CustomBackgroundId = digits
+        saveConfig()
+        updateBackgroundImage()
+    end)
+    ProxyTab:CreateHint("Only Roblox 2D image/decal asset IDs work here (not models or meshes). Leave empty to use the theme's own background. Needs \"Background\" turned ON below to actually show.")
+
+    connect(ResetBtn.MouseButton1Click, function()
+        playUISound()
+        for _, field in ipairs(CUSTOM_FIELDS) do
+            local defColor = Themes["Obsidian"][field.key]
+            Themes["Custom"][field.key] = defColor
+            if pickerObjs[field.key] then pickerObjs[field.key]:Set(defColor) end
+        end
+        CustomThemeDirty = true
+    end)
+
+    local function closeCustomizePanel()
+        Panel.Visible = false
+        Backdrop.Visible = false
+    end
+    connect(Backdrop.MouseButton1Click, closeCustomizePanel)
+    connect(CloseBtn.MouseButton1Click, function() playUISound() closeCustomizePanel() end)
+    connect(OpenBtn.MouseButton1Click, function()
+        playUISound()
+        Backdrop.Visible = true
+        Panel.Visible = true
+    end)
+
+    -- Repintado manual del panel (vive fuera del árbol normal de tabs, así
+    -- que no usa los tags automáticos como el resto de la libreria).
+    table.insert(KillerHub.TargetThemeElements, function()
+        Panel.BackgroundColor3 = CurrentTheme.BG_MAIN
+        PanelStroke.Color = CurrentTheme.BORDER
+        PTitle.TextColor3 = CurrentTheme.TEXT_WHITE
+        Hint.TextColor3 = CurrentTheme.TEXT_MUTED
+        CloseBtn.BackgroundColor3 = CurrentTheme.BG_SECONDARY
+        CloseBtn.TextColor3 = CurrentTheme.TEXT_MUTED
+        Scroll.ScrollBarImageColor3 = CurrentTheme.ACCENT
+    end)
+end
 -- 🖼️ Fondo del tema actual (definido en ThemeBackgroundImages).
 SP.General:CreateToggle("BackgroundEnabled", "Background", function(v)
     Config.BackgroundEnabled = v
