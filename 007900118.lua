@@ -597,6 +597,10 @@ local ShortcutScreenRef = nil
 -- y la apaga -> el repintado nunca cuesta mas que un cambio de tema normal,
 -- sin importar que tan rapido se mueva el color picker.
 local CustomThemeDirty = false
+-- Limita el repintado en vivo a 30 Hz. El selector conserva respuesta visual
+-- inmediata, pero la cascada de colores no satura dispositivos modestos.
+local CustomThemeAccum = 0
+local CUSTOM_THEME_INTERVAL = 1 / 30
 
 -- 📂 CARPETA DEDICADA: aísla el JSON de esta librería de cualquier otro script
 -- que también autoguarde (incluso si ese script usa un nombre genérico tipo
@@ -663,28 +667,12 @@ copyTable(Config, DefaultConfig)
 --    cualquier ráfaga del mismo resumption cycle en un solo writefile.
 -- 2) pcall en cada paso (encode y write por separado): si algo falla no se
 --    rompe el hub ni se deja un archivo a medio escribir con basura.
--- 3) 🆕 THROTTLE POR TIEMPO (fix del freeze al arrastrar el color picker de
---    Customize UI): el debounce de arriba solo colapsa llamadas dentro del
---    MISMO resumption cycle — pero un arrastre continuo dispara saveConfig()
---    en TODOS los frames durante 1-3 segundos, y cada uno de esos frames es
---    un ciclo distinto, así que antes se hacía un writefile() + JSONEncode()
---    del Config COMPLETO en cada frame del arrastre (60-120 veces por
---    segundo). Eso — no el repintado de colores — era la causa real del
---    "se traba": escribir a disco es una operación relativamente cara y
---    hacerla a esa frecuencia satura al motor. Ahora, como mucho, se escribe
---    a disco una vez cada SAVE_MIN_INTERVAL segundos; el valor final del
---    arrastre siempre queda guardado (la última llamada agenda su propio
---    writefile, nunca se pierde), solo que ya no se re-escribe en cada frame.
 local pendingConfigSave = false
-local lastConfigSaveClock = 0
-local SAVE_MIN_INTERVAL = 0.4 -- segundos entre escrituras reales a disco
 local function saveConfig()
     if pendingConfigSave then return end
     pendingConfigSave = true
-    local waitFor = math.max(0, SAVE_MIN_INTERVAL - (os.clock() - lastConfigSaveClock))
-    task.delay(waitFor, function()
+    task.defer(function()
         pendingConfigSave = false
-        lastConfigSaveClock = os.clock()
         if not writefile then return end
         local ok, enc = pcall(function() return HttpService:JSONEncode(Config) end)
         if ok and enc then pcall(function() writefile(UNIVERSAL_FILE, enc) end) end
@@ -1569,7 +1557,9 @@ local tabsSizeConn = tabsLayout:GetPropertyChangedSignal("AbsoluteContentSize"):
 end)
 table.insert(Connections, tabsSizeConn)
 
-local SettingsContainer = create("Frame", {Size = UDim2.new(1, -12, 0, 36), Position = UDim2.new(0, 6, 1, -42), BackgroundTransparency = 1}, Sidebar)
+-- Recorta los 2 px negativos del indicador de selección. Los tabs normales ya
+-- quedan recortados por su ScrollingFrame; Settings necesitaba hacerlo aquí.
+local SettingsContainer = create("Frame", {Size = UDim2.new(1, -12, 0, 36), Position = UDim2.new(0, 6, 1, -42), BackgroundTransparency = 1, ClipsDescendants = true}, Sidebar)
 local ContentContainer = create("Frame", {Name = "ContentContainer", Size = UDim2.new(1, -123, 1, -43), Position = UDim2.new(0, 123, 0, 43), BackgroundTransparency = 1, Active = true}, MainFrame)
 
 local OpenCloseBtn = create("TextButton", {Name = "KillerHubToggle", Size = UDim2.new(0, 46, 0, 46), Position = UDim2.new(0, Config.BtnX or 15, 0, Config.BtnY or 100), BackgroundColor3 = CurrentTheme.BG_MAIN, Text = "", Active = true}, ScreenGui)
@@ -1724,29 +1714,22 @@ local ShortcutIconBlinks = {} -- id -> {inst = ImageLabel, speed = ciclos/seg}
 local ShortcutIconPulses = {} -- id -> {inst = ImageLabel, scale = UIScale, speed = ciclos/seg}
 KHS._iconAnimT = 0
 
--- 🆕 V6.0.1 · fix del freeze al arrastrar el color picker de Customize UI:
--- ver el comentario grande en KillerHub:SetTheme. Mientras hay frames
--- "dirty" seguidos (arrastre activo) solo se hace el repintado LIVIANO
--- (liveOnly = true, sin fuente/shortcuts/outlines/etc.). En el primer frame
--- en el que YA NO llegó un nuevo dirty (el jugador soltó el dedo/mouse) se
--- hace UN ÚNICO repintado completo para que todo quede perfectamente al día.
-local _customThemeNeedsFullSync = false
 local function _borderAnimStep(dt)
     -- 🆕 Customize UI: aplica como MÁXIMO un repintado del tema "Custom" por
     -- frame real, sin importar cuántos eventos de arrastre del color picker
     -- llegaron desde el último frame. Corre ANTES de los early-return de
     -- abajo para que el preview en vivo funcione incluso con UiLite activo.
     if CustomThemeDirty then
-        CustomThemeDirty = false
-        _customThemeNeedsFullSync = true
-        if Config.SelectedTheme == "Custom" then
-            KillerHub:SetTheme("Custom", true) -- liveOnly: solo colores, nada de trabajo pesado
+        CustomThemeAccum = CustomThemeAccum + dt
+        if CustomThemeAccum >= CUSTOM_THEME_INTERVAL then
+            CustomThemeDirty = false
+            CustomThemeAccum = 0
+            if Config.SelectedTheme == "Custom" then
+                KillerHub:SetTheme("Custom", true)
+            end
         end
-    elseif _customThemeNeedsFullSync then
-        _customThemeNeedsFullSync = false
-        if Config.SelectedTheme == "Custom" then
-            KillerHub:SetTheme("Custom") -- arrastre terminado: un repintado completo, una sola vez
-        end
+    else
+        CustomThemeAccum = 0
     end
     -- ⚡ UiLite: cero trabajo por frame (ni una comparación más allá de esta).
     if Config.UiLite then return end
@@ -2876,7 +2859,7 @@ function KillerHub:SetFont(fontName)
     saveConfig()
     local fontEnum = Enum.Font[fontName] or Enum.Font.GothamMedium
     for _, v in ipairs(ScreenGui:GetDescendants()) do
-        if v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton") then
+        if (v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton")) and v.Font ~= fontEnum then
             v.Font = fontEnum
         end
     end
@@ -3004,19 +2987,12 @@ end
 BG_NOTIFY = function(t, x, d) pcall(function() KillerHub:Notify(t, x, d) end) end
 
 function KillerHub:SetTheme(themeName, liveOnly)
-    -- 🩹 V6.0.1 · liveOnly (fix del freeze al arrastrar el color picker de
-    -- Customize UI): cuando true, SOLO se hace el trabajo que realmente
-    -- afecta lo que se ve mientras arrastrás un color — nada de fuente,
-    -- refresco de shortcuts flotantes ni limpieza de contornos de texto, que
-    -- no cambian por mover un slider de color y antes se re-ejecutaban
-    -- ENTERO en cada frame del arrastre (varios GetDescendants() completos
-    -- de toda la UI, 60-120 veces por segundo). Ver el bloque final de esta
-    -- función y _borderAnimStep más abajo: el repintado completo se sigue
-    -- haciendo una sola vez, justo cuando el arrastre se detiene.
     if not Themes[themeName] then return end
     CurrentTheme = Themes[themeName]
     Config.SelectedTheme = themeName
-    saveConfig()
+    -- El preview del selector llama esta función muchas veces. No escribe el
+    -- archivo hasta terminar el arrastre ni repite trabajo ajeno al color.
+    if not liveOnly then saveConfig() end
     
     MainFrame.BackgroundColor3 = CurrentTheme.BG_MAIN
     MainStroke.Color = STROKE_NEUTRAL
@@ -3064,10 +3040,6 @@ function KillerHub:SetTheme(themeName, liveOnly)
         if key == "GLOW" then return CurrentTheme.GLOW or CurrentTheme.ACCENT end
         return CurrentTheme[key]
     end
-    -- 🩹 V6.0.1: ANTES esto era 1 GetDescendants() acá + otro GetDescendants()
-    -- MÁS ABAJO (el loop "ThemeRole") — dos recorridas completas del mismo
-    -- árbol de instancias en cada repintado. Se fusionaron en una sola: el
-    -- chequeo de ThemeRole vive ahora DENTRO de este mismo loop.
     local function repaintTagged(root)
         for _, v in ipairs(root:GetDescendants()) do
             local tt = v:GetAttribute("ThemeText")
@@ -3095,19 +3067,19 @@ function KillerHub:SetTheme(themeName, liveOnly)
                     v.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
                 end)
             end
-            -- 🩹 V6.0.1: antes era un loop aparte sobre ScreenGui:GetDescendants()
-            -- (root ya cubre ScreenGui cuando corresponde, y también
-            -- ShortcutScreenRef en su propia pasada — así que queda cubierto
-            -- igual, sin recorrer el árbol dos veces).
+            -- ThemeRole se resuelve en esta misma pasada: evita recorrer todo
+            -- ScreenGui una segunda vez durante cada muestra del preview.
             local role = v:GetAttribute("ThemeRole")
             if role == "BG_SECONDARY" then
-                pcall(function()
-                    v.BackgroundColor3 = CurrentTheme.BG_SECONDARY
-                    local s = v:FindFirstChildWhichIsA("UIStroke") if s then s.Color = CurrentTheme.BORDER end
-                    local tl = v:FindFirstChildWhichIsA("TextLabel") if tl and not v:GetAttribute("CustomColorLabel") then tl.TextColor3 = CurrentTheme.ACCENT end
-                end)
+                v.BackgroundColor3 = CurrentTheme.BG_SECONDARY
+                local roleStroke = v:FindFirstChildWhichIsA("UIStroke")
+                if roleStroke then roleStroke.Color = CurrentTheme.BORDER end
+                local roleLabel = v:FindFirstChildWhichIsA("TextLabel")
+                if roleLabel and not v:GetAttribute("CustomColorLabel") then
+                    roleLabel.TextColor3 = CurrentTheme.ACCENT
+                end
             elseif role == "TEXT_ACCENT" then
-                pcall(function() v.TextColor3 = CurrentTheme.ACCENT end)
+                v.TextColor3 = CurrentTheme.ACCENT
             end
         end
     end
@@ -3117,12 +3089,11 @@ function KillerHub:SetTheme(themeName, liveOnly)
     for _, refreshCallback in ipairs(self.TargetThemeElements) do
         pcall(refreshCallback)
     end
-
-    if liveOnly then return end -- 🩹 ver comentario al inicio de la función
-
-    self:SetFont(Config.SelectedFont or "GothamMedium")
-    if KillerHub._RefreshShortcuts then pcall(KillerHub._RefreshShortcuts) end
-    pcall(function() self:StripTextOutlines() end)
+    if not liveOnly then
+        self:SetFont(Config.SelectedFont or "GothamMedium")
+        if KillerHub._RefreshShortcuts then pcall(KillerHub._RefreshShortcuts) end
+        pcall(function() self:StripTextOutlines() end)
+    end
 end
 
 -- ============================================================================
@@ -4975,34 +4946,13 @@ function KillerHub:CreateTab(name, iconId, opts)
     -- Resolvemos el icono: acepta nombre ("Gun"), ID plano ("14939026710") o rbxassetid completo
     local resolvedIcon = resolveIcon(iconId)
     local hasIcon = resolvedIcon ~= nil
-    -- 🩹 V6.0.1 FIX fuente inconsistente entre pestañas: antes esta label se
-    -- creaba SIEMPRE con Enum.Font.GothamBold fijo, y solo se corregía a la
-    -- fuente configurada (Config.SelectedFont) reactivamente, la próxima vez
-    -- que corriera un SetTheme()/SetFont() completo (vía TargetThemeElements,
-    -- más abajo). Si tus scripts crean pestañas en momentos distintos (varias
-    -- cargas/loadstring por separado), algunas pestañas quedaban creadas
-    -- ANTES de esa corrección y otras DESPUÉS — de ahí que a veces "Murder"/
-    -- "Extras"/"Auto Farm" se vieran con una fuente y "Player"/"Bomb Jump"
-    -- con otra, de forma no determinista según el orden/tiempo de carga.
-    -- Ahora se resuelve la fuente correcta YA en la creación, igual que hace
-    -- el callback de abajo — así no hay ventana de tiempo en la que pueda
-    -- quedar mal, sin importar cuándo se cree cada pestaña.
-    local btnLabel = create("TextLabel", {Size = UDim2.new(1, hasIcon and -38 or -12, 1, 0), Position = UDim2.new(0, hasIcon and 34 or 12, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamBold, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left}, btn)
+    local btnLabel = create("TextLabel", {Size = UDim2.new(1, hasIcon and -38 or -12, 1, 0), Position = UDim2.new(0, hasIcon and 34 or 12, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamMedium, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left}, btn)
     pcall(function() btnLabel.TextStrokeTransparency = 1 end)
 
     local iconImg
     if hasIcon then iconImg = create("ImageLabel", {Size = UDim2.new(0, 18, 0, 18), Position = UDim2.new(0, 8, 0.5, -9), BackgroundTransparency = 1, Image = resolvedIcon, ImageColor3 = CurrentTheme.TEXT_MUTED, ScaleType = Enum.ScaleType.Fit}, btn) end
 
-    -- 🩹 V6.0.1 FIX detalle visual: la barrita indicadora de pestaña
-    -- seleccionada vivía en x = -2 (2px por FUERA del borde izquierdo del
-    -- botón). En la mayoría de las pestañas eso queda escondido porque el
-    -- fondo del sidebar es del mismo color alrededor, pero en "Settings" —
-    -- pegado a la esquina/borde del panel — esos 2px de más quedaban
-    -- sobresaliendo visiblemente por fuera de la esquina redondeada. Al
-    -- dejarla en x = 0 (al ras del botón, en vez de "mordiendo" hacia
-    -- afuera) el efecto visual de la barra de acento es prácticamente
-    -- idéntico pero ya no se sale de ningún borde redondeado.
-    local line = create("Frame", {Name = "IndicatorLine", Size = UDim2.new(0, 3, 0, 16), Position = UDim2.new(0, 0, 0.5, -8), BackgroundColor3 = CurrentTheme.ACCENT, BorderSizePixel = 0, BackgroundTransparency = 1}, btn)
+    local line = create("Frame", {Name = "IndicatorLine", Size = UDim2.new(0, 3, 0, 16), Position = UDim2.new(0, -2, 0.5, -8), BackgroundColor3 = CurrentTheme.ACCENT, BorderSizePixel = 0, BackgroundTransparency = 1}, btn)
     create("UICorner", {CornerRadius = UDim.new(1, 0)}, line)
     local lineGlow = create("UIStroke", {Thickness = 1, Color = CurrentTheme.GLOW or CurrentTheme.ACCENT, Transparency = 1}, line)
     
@@ -5111,14 +5061,11 @@ function KillerHub:CreateTabGroup(name, iconId)
     create("UICorner", {CornerRadius = UDim.new(0, 8)}, btn)
     local resolvedIcon = resolveIcon(iconId)
     local hasIcon = resolvedIcon ~= nil
-    -- 🩹 V6.0.1: mismo fix que en CreateTab (ver ahí el detalle) — fuente
-    -- resuelta ya en la creación en vez de depender de una corrección
-    -- reactiva posterior.
     local btnLabel = create("TextLabel", {
         Size = UDim2.new(1, hasIcon and -54 or -32, 1, 0),
         Position = UDim2.new(0, hasIcon and 34 or 12, 0, 0),
         BackgroundTransparency = 1, Text = name, TextColor3 = CurrentTheme.TEXT_MUTED,
-        Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamBold, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left
+        Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamMedium, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left
     }, btn)
     pcall(function() btnLabel.TextStrokeTransparency = 1 end)
 
