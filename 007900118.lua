@@ -1,5 +1,5 @@
 -- ============================================================================
--- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.8)
+-- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.9)
 -- Changelog V5.9.8 (fix centrado de texto + personalización de íconos + perf):
 --   • 🩹 FIX: texto de los shortcuts descentrado/"más abajo" — sobre todo
 --     visible en shortcuts de Toggle (sufijo ": ON"/": OFF"). Causa real: la
@@ -597,6 +597,10 @@ local ShortcutScreenRef = nil
 -- y la apaga -> el repintado nunca cuesta mas que un cambio de tema normal,
 -- sin importar que tan rapido se mueva el color picker.
 local CustomThemeDirty = false
+-- Limita el repintado en vivo a 30 Hz. El selector conserva respuesta visual
+-- inmediata, pero la cascada de colores no satura dispositivos modestos.
+local CustomThemeAccum = 0
+local CUSTOM_THEME_INTERVAL = 1 / 30
 
 -- 📂 CARPETA DEDICADA: aísla el JSON de esta librería de cualquier otro script
 -- que también autoguarde (incluso si ese script usa un nombre genérico tipo
@@ -1553,7 +1557,9 @@ local tabsSizeConn = tabsLayout:GetPropertyChangedSignal("AbsoluteContentSize"):
 end)
 table.insert(Connections, tabsSizeConn)
 
-local SettingsContainer = create("Frame", {Size = UDim2.new(1, -12, 0, 36), Position = UDim2.new(0, 6, 1, -42), BackgroundTransparency = 1}, Sidebar)
+-- Recorta los 2 px negativos del indicador de selección. Los tabs normales ya
+-- quedan recortados por su ScrollingFrame; Settings necesitaba hacerlo aquí.
+local SettingsContainer = create("Frame", {Size = UDim2.new(1, -12, 0, 36), Position = UDim2.new(0, 6, 1, -42), BackgroundTransparency = 1, ClipsDescendants = true}, Sidebar)
 local ContentContainer = create("Frame", {Name = "ContentContainer", Size = UDim2.new(1, -123, 1, -43), Position = UDim2.new(0, 123, 0, 43), BackgroundTransparency = 1, Active = true}, MainFrame)
 
 local OpenCloseBtn = create("TextButton", {Name = "KillerHubToggle", Size = UDim2.new(0, 46, 0, 46), Position = UDim2.new(0, Config.BtnX or 15, 0, Config.BtnY or 100), BackgroundColor3 = CurrentTheme.BG_MAIN, Text = "", Active = true}, ScreenGui)
@@ -1714,10 +1720,16 @@ local function _borderAnimStep(dt)
     -- llegaron desde el último frame. Corre ANTES de los early-return de
     -- abajo para que el preview en vivo funcione incluso con UiLite activo.
     if CustomThemeDirty then
-        CustomThemeDirty = false
-        if Config.SelectedTheme == "Custom" then
-            KillerHub:SetTheme("Custom")
+        CustomThemeAccum = CustomThemeAccum + dt
+        if CustomThemeAccum >= CUSTOM_THEME_INTERVAL then
+            CustomThemeDirty = false
+            CustomThemeAccum = 0
+            if Config.SelectedTheme == "Custom" then
+                KillerHub:SetTheme("Custom", true)
+            end
         end
+    else
+        CustomThemeAccum = 0
     end
     -- ⚡ UiLite: cero trabajo por frame (ni una comparación más allá de esta).
     if Config.UiLite then return end
@@ -2847,7 +2859,7 @@ function KillerHub:SetFont(fontName)
     saveConfig()
     local fontEnum = Enum.Font[fontName] or Enum.Font.GothamMedium
     for _, v in ipairs(ScreenGui:GetDescendants()) do
-        if v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton") then
+        if (v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton")) and v.Font ~= fontEnum then
             v.Font = fontEnum
         end
     end
@@ -2974,11 +2986,13 @@ end
 -- Conecta el notificador diferido del cargador de fondos (KillerHub ya existe).
 BG_NOTIFY = function(t, x, d) pcall(function() KillerHub:Notify(t, x, d) end) end
 
-function KillerHub:SetTheme(themeName)
+function KillerHub:SetTheme(themeName, liveOnly)
     if not Themes[themeName] then return end
     CurrentTheme = Themes[themeName]
     Config.SelectedTheme = themeName
-    saveConfig()
+    -- El preview del selector llama esta función muchas veces. No escribe el
+    -- archivo hasta terminar el arrastre ni repite trabajo ajeno al color.
+    if not liveOnly then saveConfig() end
     
     MainFrame.BackgroundColor3 = CurrentTheme.BG_MAIN
     MainStroke.Color = STROKE_NEUTRAL
@@ -3053,28 +3067,33 @@ function KillerHub:SetTheme(themeName)
                     v.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
                 end)
             end
+            -- ThemeRole se resuelve en esta misma pasada: evita recorrer todo
+            -- ScreenGui una segunda vez durante cada muestra del preview.
+            local role = v:GetAttribute("ThemeRole")
+            if role == "BG_SECONDARY" then
+                v.BackgroundColor3 = CurrentTheme.BG_SECONDARY
+                local roleStroke = v:FindFirstChildWhichIsA("UIStroke")
+                if roleStroke then roleStroke.Color = CurrentTheme.BORDER end
+                local roleLabel = v:FindFirstChildWhichIsA("TextLabel")
+                if roleLabel and not v:GetAttribute("CustomColorLabel") then
+                    roleLabel.TextColor3 = CurrentTheme.ACCENT
+                end
+            elseif role == "TEXT_ACCENT" then
+                v.TextColor3 = CurrentTheme.ACCENT
+            end
         end
     end
     repaintTagged(ScreenGui)
     if ShortcutScreenRef then pcall(repaintTagged, ShortcutScreenRef) end
 
-    for _, v in ipairs(ScreenGui:GetDescendants()) do
-        local role = v:GetAttribute("ThemeRole")
-        if role == "BG_SECONDARY" then
-            v.BackgroundColor3 = CurrentTheme.BG_SECONDARY
-            local s = v:FindFirstChildWhichIsA("UIStroke") if s then s.Color = CurrentTheme.BORDER end
-            local tl = v:FindFirstChildWhichIsA("TextLabel") if tl and not v:GetAttribute("CustomColorLabel") then tl.TextColor3 = CurrentTheme.ACCENT end
-        elseif role == "TEXT_ACCENT" then
-            v.TextColor3 = CurrentTheme.ACCENT
-        end
-    end
-    
     for _, refreshCallback in ipairs(self.TargetThemeElements) do
         pcall(refreshCallback)
     end
-    self:SetFont(Config.SelectedFont or "GothamMedium")
-    if KillerHub._RefreshShortcuts then pcall(KillerHub._RefreshShortcuts) end
-    pcall(function() self:StripTextOutlines() end)
+    if not liveOnly then
+        self:SetFont(Config.SelectedFont or "GothamMedium")
+        if KillerHub._RefreshShortcuts then pcall(KillerHub._RefreshShortcuts) end
+        pcall(function() self:StripTextOutlines() end)
+    end
 end
 
 -- ============================================================================
@@ -4927,7 +4946,7 @@ function KillerHub:CreateTab(name, iconId, opts)
     -- Resolvemos el icono: acepta nombre ("Gun"), ID plano ("14939026710") o rbxassetid completo
     local resolvedIcon = resolveIcon(iconId)
     local hasIcon = resolvedIcon ~= nil
-    local btnLabel = create("TextLabel", {Size = UDim2.new(1, hasIcon and -38 or -12, 1, 0), Position = UDim2.new(0, hasIcon and 34 or 12, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font.GothamBold, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left}, btn)
+    local btnLabel = create("TextLabel", {Size = UDim2.new(1, hasIcon and -38 or -12, 1, 0), Position = UDim2.new(0, hasIcon and 34 or 12, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamMedium, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left}, btn)
     pcall(function() btnLabel.TextStrokeTransparency = 1 end)
 
     local iconImg
@@ -5046,7 +5065,7 @@ function KillerHub:CreateTabGroup(name, iconId)
         Size = UDim2.new(1, hasIcon and -54 or -32, 1, 0),
         Position = UDim2.new(0, hasIcon and 34 or 12, 0, 0),
         BackgroundTransparency = 1, Text = name, TextColor3 = CurrentTheme.TEXT_MUTED,
-        Font = Enum.Font.GothamBold, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left
+        Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamMedium, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left
     }, btn)
     pcall(function() btnLabel.TextStrokeTransparency = 1 end)
 
