@@ -1,9 +1,5 @@
 -- ============================================================================
 -- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.8)
--- Changelog V6.0.1:
---   • Modo Double: cada columna tiene su PROPIO scroll (se deslizan independientes).
---     Las pestañas con color picker (ancho completo) siguen usando un solo scroll.
---   • Los dropdowns/pickers que se abren hacen auto-scroll en su propia columna.
 -- Changelog V6.0.0 (rendimiento + Change interface + más executors):
 --   • ⚡ Cambio de tema SIN lag: SetTheme ya no recorre toda la UI en un solo
 --     frame. Lo que ves se repinta al instante y el resto (pestañas ocultas,
@@ -1718,66 +1714,6 @@ function KHS.QueueReflow(st)
     end)
 end
 
--- Modo columnas independientes: el ScrollingFrame de la pestaña deja de
--- desplazarse (cada columna tiene su propio scroll). Al volver a Classic o al
--- usar bandas se restauran sus valores originales.
-function KHS.DropCols(st)
-    if st.rootConn then pcall(function() st.rootConn:Disconnect() end) st.rootConn = nil end
-    if st.root then st.root:Destroy() st.root, st.colL, st.colR = nil, nil, nil end
-end
-
-function KHS.SetOuterScroll(st, off)
-    local f = st.frame
-    if off then
-        if not st.outerSaved then
-            st.outerSaved = {f.ScrollBarThickness, f.ScrollBarImageTransparency}
-        end
-        f.ScrollingEnabled = false
-        f.ScrollBarThickness = 0
-        f.CanvasPosition = Vector2.new(0, 0)
-    elseif st.outerSaved then
-        f.ScrollingEnabled = true
-        f.ScrollBarThickness = st.outerSaved[1]
-        f.ScrollBarImageTransparency = st.outerSaved[2]
-        st.outerSaved = nil
-    end
-end
-
--- Crea (una sola vez) las dos columnas con scroll propio.
-function KHS.EnsureCols(st)
-    if st.root then return end
-    local frame = st.frame
-    local function fit()
-        if st.root then
-            st.root.Size = UDim2.new(1, 0, 0, math.max(60, frame.AbsoluteSize.Y - 16))
-        end
-    end
-    st.root = create("Frame", {
-        Name = "KHColsRoot", Size = UDim2.new(1, 0, 0, math.max(60, frame.AbsoluteSize.Y - 16)),
-        BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = -1000,
-    }, frame)
-    st.seen[st.root] = true
-    create("UIListLayout", {
-        FillDirection = Enum.FillDirection.Horizontal, SortOrder = Enum.SortOrder.LayoutOrder,
-        Padding = UDim.new(0, 8), VerticalAlignment = Enum.VerticalAlignment.Top,
-    }, st.root)
-    local function mkCol(o)
-        -- Scale en un ScrollingFrame se mide contra el CANVAS (círculo vicioso con
-        -- AutomaticCanvasSize), por eso el alto de la raíz va en píxeles (fit()).
-        local c = create("ScrollingFrame", {
-            Name = "KHColumn", Size = UDim2.new(0.5, -4, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
-            CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-            ScrollingDirection = Enum.ScrollingDirection.Y, ScrollBarThickness = KillerHubIsPC and 5 or 2,
-            ScrollBarImageColor3 = CurrentTheme.ACCENT, LayoutOrder = o,
-        }, st.root)
-        create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8)}, c)
-        create("UIPadding", {PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 10)}, c)
-        return c
-    end
-    st.colL, st.colR = mkCol(1), mkCol(2)
-    st.rootConn = connect(frame:GetPropertyChangedSignal("AbsoluteSize"), fit)
-end
-
 -- Envoltorio: mientras se reacomoda, ChildAdded ignora lo que la propia librería
 -- crea/mueve (columnas y tarjetas); pcall evita que un error deje el flag pegado.
 function KHS.Reflow(st)
@@ -1805,8 +1741,6 @@ function KHS.ReflowInner(st)
         for i = 1, #st.cards do st.cards[i]:Destroy() end
         for i = 1, #st.bands do st.bands[i]:Destroy() end
         st.bands, st.cards = {}, {}
-        KHS.DropCols(st)
-        KHS.SetOuterScroll(st, false)
         layout.Padding = UDim.new(0, 6)
         KHS.RefitTexts(live)
         return
@@ -1841,17 +1775,6 @@ function KHS.ReflowInner(st)
             acc = acc + KHS.itemH(live[i]) + 6
         end
         groups = {g1, g2}
-    end
-
-    -- ¿Algún grupo necesita ancho completo (color picker)? Entonces esa pestaña usa
-    -- el modo "bandas" (un solo scroll). Si no, cada columna se desliza SOLA.
-    local anyWide = false
-    for k = 1, #groups do if groups[k].wide then anyWide = true break end end
-    if not anyWide then
-        KHS.EnsureCols(st)
-        KHS.SetOuterScroll(st, true)
-    else
-        KHS.SetOuterScroll(st, false)
     end
 
     local oldBands, oldCards = st.bands, st.cards
@@ -1900,11 +1823,7 @@ function KHS.ReflowInner(st)
             st.seen[card] = true
             for i = 1, #g.items do g.items[i].Parent = card end
         else
-            if anyWide then
-                if not band then openBand() end
-            else
-                colL, colR = st.colL, st.colR
-            end
+            if not band then openBand() end
             local gh = 16
             for i = 1, #g.items do gh = gh + KHS.itemH(g.items[i]) + 6 end
             local toLeft = (hL <= hR)
@@ -1915,7 +1834,6 @@ function KHS.ReflowInner(st)
     end
     for i = 1, #oldCards do oldCards[i]:Destroy() end
     for i = 1, #oldBands do oldBands[i]:Destroy() end
-    if anyWide then KHS.DropCols(st) end
     KHS.CardsRefresh(st)
 end
 
@@ -2666,15 +2584,6 @@ end
 -- ============================================================================
 local function scrollWidgetIntoView(scrollFrame, widgetFrame, growBy)
     if not scrollFrame or not widgetFrame then return end
-    -- V6.0.1: en modo Double cada columna tiene su propio scroll; usamos el
-    -- ScrollingFrame más cercano al widget (en Classic es la misma pestaña).
-    do
-        local n = widgetFrame.Parent
-        while n and n ~= scrollFrame.Parent do
-            if n:IsA("ScrollingFrame") then scrollFrame = n break end
-            n = n.Parent
-        end
-    end
     if not scrollFrame:IsA("ScrollingFrame") then return end
     growBy = math.max(growBy or 0, 0)
     local viewportBottom = scrollFrame.AbsolutePosition.Y + scrollFrame.AbsoluteSize.Y
@@ -2688,9 +2597,7 @@ local function scrollWidgetIntoView(scrollFrame, widgetFrame, growBy)
     -- como si la animación "no hiciera nada" al abrirlo hasta abajo. Sumamos
     -- el crecimiento previsto (growBy) al CanvasSize antes de calcular el
     -- límite, para que el scroll SÍ pueda alcanzar el contenido nuevo.
-    local baseCanvasH = (scrollFrame.AutomaticCanvasSize ~= Enum.AutomaticSize.None)
-        and scrollFrame.AbsoluteCanvasSize.Y or scrollFrame.CanvasSize.Y.Offset
-    local anticipatedCanvasH = baseCanvasH + growBy
+    local anticipatedCanvasH = scrollFrame.CanvasSize.Y.Offset + growBy
     local maxCanvasY = math.max(0, anticipatedCanvasH - scrollFrame.AbsoluteSize.Y)
     local newY = math.min(scrollFrame.CanvasPosition.Y + overflow, maxCanvasY)
     if newY <= scrollFrame.CanvasPosition.Y then return end
