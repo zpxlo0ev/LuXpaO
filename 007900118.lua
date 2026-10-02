@@ -1,5 +1,26 @@
 -- ============================================================================
 -- 👻 KILLER HUB UNIVERSAL FRAMEWORK | OBSIDIAN ULTRA PREMIUM EDITION (V5.9.8)
+-- Changelog V6.0.1:
+--   • Modo Double: cada columna tiene su PROPIO scroll (se deslizan independientes).
+--     Las pestañas con color picker (ancho completo) siguen usando un solo scroll.
+--   • Los dropdowns/pickers que se abren hacen auto-scroll en su propia columna.
+-- Changelog V6.0.0 (rendimiento + Change interface + más executors):
+--   • ⚡ Cambio de tema SIN lag: SetTheme ya no recorre toda la UI en un solo
+--     frame. Lo que ves se repinta al instante y el resto (pestañas ocultas,
+--     callbacks, fuentes) se reparte en segundo plano con presupuesto de ~2-4 ms
+--     por frame. Cache de instancias con tema, sin closures por instancia y
+--     escribiendo solo lo que realmente cambia. El Customize UI (arrastrar
+--     colores) usa el mismo motor, a 24 Hz máx.
+--   • ⚡ saveConfig con debounce real (1 escritura cada 0.35 s) en vez de una
+--     por frame al arrastrar sliders / color pickers.
+--   • ⚡ create() sin closures por instancia (menos basura => menos GC al cargar),
+--     selectTab() solo toca las 2 pestañas que cambian, bordes internos a ~24 Hz.
+--   • 🆕 Settings ▸ General ▸ "Change interface": Classic (la de siempre) o
+--     Double (sidebar angosta SOLO con íconos + contenido en 2 columnas de
+--     tarjetas, una por CreateSection). Se guarda en el JSON. Por código:
+--     KillerHub:SetInterface("Classic" | "Double"). La API NO cambia.
+--   • 🧩 Más executors: lectura de funciones del executor por _G / getgenv /
+--     getfenv, shim de task.defer/delay/cancel, fuentes con lookup seguro.
 -- Changelog V5.9.8 (fix centrado de texto + personalización de íconos + perf):
 --   • 🩹 FIX: texto de los shortcuts descentrado/"más abajo" — sobre todo
 --     visible en shortcuts de Toggle (sufijo ": ON"/": OFF"). Causa real: la
@@ -264,6 +285,23 @@
 -- traen, la librería trabaja con COPIAS de los servicios, así que si el juego
 -- hookea/inspecciona game:GetService no nos ve, y en algunos executors evita
 -- errores de permisos con CoreGui. Si no existe cloneref, se usa el servicio tal cual.
+-- 🧩 V6.0.0 · Shim de la librería `task` para executors antiguos/móviles que no
+-- traen task.defer / task.delay / task.cancel (Arceus X, algunos Codex viejos...).
+do
+    local t = task
+    if type(t) == "table" then
+        pcall(function()
+            if not t.defer then t.defer = t.spawn end
+            if not t.delay then
+                t.delay = function(sec, fn, ...)
+                    local args = table.pack(...)
+                    return t.spawn(function() t.wait(sec) fn(table.unpack(args, 1, args.n)) end)
+                end
+            end
+            if not t.cancel then t.cancel = function() end end
+        end)
+    end
+end
 local KH_svc = function(name)
     local svc = game:GetService(name)
     local cref = rawget(_G, "cloneref") or rawget(_G, "clonereference")
@@ -329,7 +367,14 @@ do
     function E.g(name)
         local v = rawget(_G, name)
         if v ~= nil then return v end
-        local ok, res = pcall(function() return rawget(getfenv(), name) end)
+        -- 🧩 V6.0.0: varios executors móviles (Arceus X, etc.) NO ponen sus
+        -- funciones en _G con rawget: las exponen por el entorno del script
+        -- (metatabla __index) o por getgenv(). Probamos todas las vías.
+        local ok, res = pcall(function() return getgenv()[name] end)
+        if ok and res ~= nil then return res end
+        ok, res = pcall(function() return getfenv()[name] end)
+        if ok and res ~= nil then return res end
+        ok, res = pcall(function() return rawget(getfenv(), name) end)
         if ok and res ~= nil then return res end
         local ok2, res2 = pcall(function() return _G[name] end)
         if ok2 then return res2 end
@@ -600,7 +645,7 @@ local CustomThemeDirty = false
 -- Limita el repintado en vivo a 30 Hz. El selector conserva respuesta visual
 -- inmediata, pero la cascada de colores no satura dispositivos modestos.
 local CustomThemeAccum = 0
-local CUSTOM_THEME_INTERVAL = 1 / 30
+local CUSTOM_THEME_INTERVAL = 1 / 24
 
 -- 📂 CARPETA DEDICADA: aísla el JSON de esta librería de cualquier otro script
 -- que también autoguarde (incluso si ese script usa un nombre genérico tipo
@@ -671,7 +716,11 @@ local pendingConfigSave = false
 local function saveConfig()
     if pendingConfigSave then return end
     pendingConfigSave = true
-    task.defer(function()
+    -- ⚡ V6.0.0: antes se escribía el archivo en CADA frame mientras arrastrabas
+    -- un color picker / slider (JSONEncode + writefile ~60 veces/seg => lag y
+    -- tirones, sobre todo en móvil). Ahora se junta todo y se escribe 1 vez
+    -- cada 0.35 s como máximo (siempre se guarda el último valor).
+    task.delay(0.35, function()
         pendingConfigSave = false
         if not writefile then return end
         local ok, enc = pcall(function() return HttpService:JSONEncode(Config) end)
@@ -775,39 +824,41 @@ local INNER_BORDER_LIMIT = 700 -- V5.4.9: antes 160 -> las últimas pestañas (T
 local _registerInnerStroke = nil -- se asigna cuando _borderSeq ya existe
 local _shortcutBorderColor = nil -- forward: se asigna junto a getShortcutBorder()
 
-local function create(instanceType, properties, parent)
-    local obj = Instance.new(instanceType)
-    -- 🧩 V5.9.1: la asignación va dentro de un pcall en bloque (coste: un solo
-    -- pcall por instancia, únicamente al construir la UI). Si el cliente o el
-    -- executor no conoce alguna propiedad nueva (p.ej. ScreenInsets), en vez de
-    -- tirar TODO el script se reintenta propiedad por propiedad y se ignora
-    -- solo la que no existe. Esto es lo que hacía fallar la carga en PC.
-    if not pcall(function()
-        for prop, val in pairs(properties) do obj[prop] = val end
-    end) then
-        for prop, val in pairs(properties) do
-            pcall(function() obj[prop] = val end)
+local create
+do
+    -- ⚡ V6.0.0: los helpers se definen UNA sola vez. Antes se creaba un
+    -- closure por instancia (y otro por cada propiedad extra) al construir la
+    -- UI: miles de closures de basura => GC y tirones al cargar en gama baja.
+    local function assignAll(obj, props)
+        for prop, val in pairs(props) do obj[prop] = val end
+    end
+    local function assignOne(obj, prop, val) obj[prop] = val end
+    local BORDER_MODE = Enum.ApplyStrokeMode.Border
+    create = function(instanceType, properties, parent)
+        local obj = Instance.new(instanceType)
+        -- 🧩 V5.9.1: asignación en bloque; si el cliente/executor no conoce
+        -- alguna propiedad se reintenta una por una ignorando la que falle.
+        if not pcall(assignAll, obj, properties) then
+            for prop, val in pairs(properties) do
+                pcall(assignOne, obj, prop, val)
+            end
         end
+        -- 🧼 UIStroke sobre texto = contorno por glifo (doble capa fea). Border lo evita.
+        if instanceType == "UIStroke" and properties.ApplyStrokeMode == nil then
+            pcall(assignOne, obj, "ApplyStrokeMode", BORDER_MODE)
+        end
+        pcall(tagThemed, obj, properties)
+        -- 🧼 Higiene visual: TextStrokeTransparency = 1 salvo que se pida otra cosa.
+        if (instanceType == "TextLabel" or instanceType == "TextButton" or instanceType == "TextBox")
+           and properties.TextStrokeTransparency == nil then
+            pcall(assignOne, obj, "TextStrokeTransparency", 1)
+        end
+        if parent then obj.Parent = parent end
+        if instanceType == "UIStroke" and _registerInnerStroke then
+            pcall(_registerInnerStroke, obj, properties)
+        end
+        return obj
     end
-    -- 🧼 A UIStroke parented to a TextLabel/TextButton/TextBox defaults to
-    -- "Contextual", which outlines every GLYPH -> the ugly double-layer text
-    -- the premium themes suffered from. Border mode keeps only the frame edge.
-    if instanceType == "UIStroke" and properties.ApplyStrokeMode == nil then
-        pcall(function() obj.ApplyStrokeMode = Enum.ApplyStrokeMode.Border end)
-    end
-    pcall(tagThemed, obj, properties)
-    -- 🧼 Higiene visual: fuerza TextStrokeTransparency = 1 en cualquier texto
-    -- salvo que el llamador lo haya definido explicitamente. Elimina el "doble
-    -- borde de color" que aparece con ciertas fuentes / DPIs altos.
-    if (instanceType == "TextLabel" or instanceType == "TextButton" or instanceType == "TextBox")
-       and properties.TextStrokeTransparency == nil then
-        pcall(function() obj.TextStrokeTransparency = 1 end)
-    end
-    if parent then obj.Parent = parent end
-    if instanceType == "UIStroke" and _registerInnerStroke then
-        pcall(_registerInnerStroke, obj, properties)
-    end
-    return obj
 end
 
 -- 💾 SCRIPT DEFAULTS ENGINE
@@ -1562,6 +1613,510 @@ table.insert(Connections, tabsSizeConn)
 local SettingsContainer = create("Frame", {Size = UDim2.new(1, -12, 0, 36), Position = UDim2.new(0, 6, 1, -42), BackgroundTransparency = 1, ClipsDescendants = true}, Sidebar)
 local ContentContainer = create("Frame", {Name = "ContentContainer", Size = UDim2.new(1, -123, 1, -43), Position = UDim2.new(0, 123, 0, 43), BackgroundTransparency = 1, Active = true}, MainFrame)
 
+-- ============================================================================
+-- 🆕 V6.0.0 · CHANGE INTERFACE  (Classic  /  Double)
+-- ----------------------------------------------------------------------------
+--  • Classic: la interfaz de siempre (sidebar con nombres, 1 columna).
+--  • Double : sidebar angosta con SOLO los íconos de cada pestaña (los tabs sin
+--             ícono muestran sus iniciales) y el contenido en 2 columnas de
+--             "tarjetas" (una tarjeta por cada CreateSection).
+--  La API pública NO cambia: CreateTab / CreatePage / CreateToggle... siguen
+--  igual; el reacomodo en columnas se hace por detrás (reparentando los widgets
+--  ya creados), así que cualquier script existente funciona en ambos modos.
+--  Se elige en Settings ▸ General ▸ "Change interface" (o por código con
+--  KillerHub:SetInterface("Classic" | "Double")). Se guarda en el JSON.
+-- ============================================================================
+KHS.FontCache = {}
+function KHS.FontOf(name)
+    if name == nil then return nil end
+    local hit = KHS.FontCache[name]
+    if hit ~= nil then return hit or nil end
+    local ok, f = pcall(function() return Enum.Font[name] end)
+    if not ok then f = nil end
+    KHS.FontCache[name] = f or false
+    return f
+end
+
+KHS.IconMode = (Config.InterfaceMode == "Double")
+KHS.SB_CLASSIC, KHS.SB_ICON = 125, 54
+KHS.TabRegs = {}                                  -- registros de pestañas (para restilizar)
+KHS.Groups = {}                                   -- grupos de pestañas (CreateTabGroup)
+KHS.ColList = {}                                  -- estados de reacomodo por ScrollingFrame
+KHS.Sections = setmetatable({}, {__mode = "k"})   -- frames creados por CreateSection
+KHS.Hints = setmetatable({}, {__mode = "k"})      -- labels creados por CreateHint
+KHS.Paras = setmetatable({}, {__mode = "k"})      -- frame de CreateParagraph -> su label de texto
+KHS.Wide = setmetatable({}, {__mode = "k"})       -- widgets que necesitan ancho completo (color pickers)
+KHS.IfaceListeners = {}
+
+-- Ancho útil (px) del contenido de una tarjeta según el tamaño objetivo de la ventana.
+function KHS.InnerWidth()
+    local W = guiTargetSize().X.Offset
+    if KHS.IconMode then return math.max(120, (W - 102) / 2) end
+    return math.max(200, W - 149)
+end
+
+function KHS.measure(text, size, font, width)
+    local ok, res = pcall(function()
+        KHS.TextSvc = KHS.TextSvc or KH_svc("TextService")
+        return KHS.TextSvc:GetTextSize(text, size, font, Vector2.new(math.max(40, width), 10000))
+    end)
+    if ok and res then return res.Y end
+    return nil
+end
+
+-- Hints y párrafos ajustan su ALTO al texto real según el ancho disponible, así
+-- nada se encima con el widget de abajo (importante con columnas angostas).
+function KHS.RefitTexts(items)
+    local inner = KHS.InnerWidth()
+    for i = 1, #items do
+        local it = items[i]
+        if KHS.Hints[it] then
+            local h = KHS.measure(it.Text, it.TextSize, it.Font, inner - 6)
+            it.Size = UDim2.new(1, -4, 0, math.max(15, h and (math.ceil(h) + 2) or 15))
+        else
+            local tx = KHS.Paras[it]
+            if tx then
+                local h = KHS.measure(tx.Text, tx.TextSize, tx.Font, inner - 26)
+                h = math.max(24, h and math.ceil(h) or 24)
+                tx.Size = UDim2.new(1, -24, 0, h)
+                it.Size = UDim2.new(1, 0, 0, math.max(50, 28 + h))
+            end
+        end
+    end
+end
+
+function KHS.itemH(it)
+    if not it.Visible then return 0 end
+    local h = it.AbsoluteSize.Y
+    if h <= 0 then h = it.Size.Y.Offset end
+    return h
+end
+
+function KHS.AttachCols(frame, layout)
+    local st = {
+        frame = frame, layout = layout, n = 0, items = {}, cards = {}, bands = {},
+        seen = setmetatable({}, {__mode = "k"}), active = KHS.IconMode, pending = false,
+    }
+    KHS.ColList[#KHS.ColList + 1] = st
+    connect(frame.ChildAdded, function(ch)
+        if st.building or st.seen[ch] or not ch:IsA("GuiObject") then return end
+        st.n = st.n + 1
+        st.seen[ch] = true
+        ch.LayoutOrder = st.n           -- el orden de creación pasa a ser el LayoutOrder
+        st.items[#st.items + 1] = ch
+        if st.active then KHS.QueueReflow(st) end
+    end)
+    return st
+end
+
+function KHS.QueueReflow(st)
+    if st.pending then return end
+    st.pending = true
+    task.defer(function()
+        st.pending = false
+        KHS.Reflow(st)
+    end)
+end
+
+-- Modo columnas independientes: el ScrollingFrame de la pestaña deja de
+-- desplazarse (cada columna tiene su propio scroll). Al volver a Classic o al
+-- usar bandas se restauran sus valores originales.
+function KHS.DropCols(st)
+    if st.rootConn then pcall(function() st.rootConn:Disconnect() end) st.rootConn = nil end
+    if st.root then st.root:Destroy() st.root, st.colL, st.colR = nil, nil, nil end
+end
+
+function KHS.SetOuterScroll(st, off)
+    local f = st.frame
+    if off then
+        if not st.outerSaved then
+            st.outerSaved = {f.ScrollBarThickness, f.ScrollBarImageTransparency}
+        end
+        f.ScrollingEnabled = false
+        f.ScrollBarThickness = 0
+        f.CanvasPosition = Vector2.new(0, 0)
+    elseif st.outerSaved then
+        f.ScrollingEnabled = true
+        f.ScrollBarThickness = st.outerSaved[1]
+        f.ScrollBarImageTransparency = st.outerSaved[2]
+        st.outerSaved = nil
+    end
+end
+
+-- Crea (una sola vez) las dos columnas con scroll propio.
+function KHS.EnsureCols(st)
+    if st.root then return end
+    local frame = st.frame
+    local function fit()
+        if st.root then
+            st.root.Size = UDim2.new(1, 0, 0, math.max(60, frame.AbsoluteSize.Y - 16))
+        end
+    end
+    st.root = create("Frame", {
+        Name = "KHColsRoot", Size = UDim2.new(1, 0, 0, math.max(60, frame.AbsoluteSize.Y - 16)),
+        BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = -1000,
+    }, frame)
+    st.seen[st.root] = true
+    create("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal, SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 8), VerticalAlignment = Enum.VerticalAlignment.Top,
+    }, st.root)
+    local function mkCol(o)
+        -- Scale en un ScrollingFrame se mide contra el CANVAS (círculo vicioso con
+        -- AutomaticCanvasSize), por eso el alto de la raíz va en píxeles (fit()).
+        local c = create("ScrollingFrame", {
+            Name = "KHColumn", Size = UDim2.new(0.5, -4, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+            CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+            ScrollingDirection = Enum.ScrollingDirection.Y, ScrollBarThickness = KillerHubIsPC and 5 or 2,
+            ScrollBarImageColor3 = CurrentTheme.ACCENT, LayoutOrder = o,
+        }, st.root)
+        create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8)}, c)
+        create("UIPadding", {PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 10)}, c)
+        return c
+    end
+    st.colL, st.colR = mkCol(1), mkCol(2)
+    st.rootConn = connect(frame:GetPropertyChangedSignal("AbsoluteSize"), fit)
+end
+
+-- Envoltorio: mientras se reacomoda, ChildAdded ignora lo que la propia librería
+-- crea/mueve (columnas y tarjetas); pcall evita que un error deje el flag pegado.
+function KHS.Reflow(st)
+    st.building = true
+    local ok, err = pcall(KHS.ReflowInner, st)
+    st.building = false
+    if not ok then warn("[KillerHub] Error reacomodando la interfaz: " .. tostring(err)) end
+end
+
+function KHS.ReflowInner(st)
+    local frame, layout = st.frame, st.layout
+    if not frame.Parent then return end
+    local live = {}
+    for i = 1, #st.items do
+        local it = st.items[i]
+        if it.Parent then live[#live + 1] = it end
+    end
+    st.items = live
+
+    -- ── Clásico: todo vuelve al frame (el LayoutOrder conserva el orden) ──
+    if not st.active then
+        for i = 1, #live do
+            if live[i].Parent ~= frame then live[i].Parent = frame end
+        end
+        for i = 1, #st.cards do st.cards[i]:Destroy() end
+        for i = 1, #st.bands do st.bands[i]:Destroy() end
+        st.bands, st.cards = {}, {}
+        KHS.DropCols(st)
+        KHS.SetOuterScroll(st, false)
+        layout.Padding = UDim.new(0, 6)
+        KHS.RefitTexts(live)
+        return
+    end
+
+    -- ── Doble: filas ("bandas") de 2 columnas de tarjetas ──
+    -- Un grupo con color picker necesita ~370 px de ancho: ocupa una tarjeta de
+    -- ancho completo (corta la banda) en vez de salirse de una columna angosta.
+    layout.Padding = UDim.new(0, 8)
+    KHS.RefitTexts(live)
+
+    local groups, cur = {}, nil
+    for i = 1, #live do
+        local it = live[i]
+        if KHS.Sections[it] then
+            cur = {head = it, items = {it}}
+            groups[#groups + 1] = cur
+        else
+            if not cur then cur = {items = {}} groups[#groups + 1] = cur end
+            cur.items[#cur.items + 1] = it
+        end
+        if KHS.Wide[it] then cur.wide = true end
+    end
+    -- Pestaña sin secciones ni pickers: se parte en dos tarjetas para usar las 2 columnas.
+    if #groups == 1 and not groups[1].head and not groups[1].wide and #live > 3 then
+        local total = 0
+        for i = 1, #live do total = total + KHS.itemH(live[i]) + 6 end
+        local acc, g1, g2 = 0, {items = {}}, {items = {}}
+        for i = 1, #live do
+            local target = (acc < total / 2) and g1 or g2
+            target.items[#target.items + 1] = live[i]
+            acc = acc + KHS.itemH(live[i]) + 6
+        end
+        groups = {g1, g2}
+    end
+
+    -- ¿Algún grupo necesita ancho completo (color picker)? Entonces esa pestaña usa
+    -- el modo "bandas" (un solo scroll). Si no, cada columna se desliza SOLA.
+    local anyWide = false
+    for k = 1, #groups do if groups[k].wide then anyWide = true break end end
+    if not anyWide then
+        KHS.EnsureCols(st)
+        KHS.SetOuterScroll(st, true)
+    else
+        KHS.SetOuterScroll(st, false)
+    end
+
+    local oldBands, oldCards = st.bands, st.cards
+    st.bands, st.cards = {}, {}
+    local order, band, colL, colR, hL, hR = 0, nil, nil, nil, 0, 0
+
+    local function newCard(parent, k)
+        local card = create("Frame", {
+            Name = "KHCard", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundColor3 = CurrentTheme.BG_SECONDARY, BackgroundTransparency = 0.55,
+            BorderSizePixel = 0, LayoutOrder = k,
+        }, parent)
+        create("UICorner", {CornerRadius = UDim.new(0, 10)}, card)
+        create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, card)
+        create("UIPadding", {PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)}, card)
+        create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6)}, card)
+        st.cards[#st.cards + 1] = card
+        return card
+    end
+    local function openBand()
+        order = order + 1
+        band = create("Frame", {
+            Name = "KHBand", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = -1000 + order,
+        }, frame)
+        st.seen[band] = true
+        st.bands[#st.bands + 1] = band
+        create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8), VerticalAlignment = Enum.VerticalAlignment.Top}, band)
+        local function mkCol(o)
+            local c = create("Frame", {
+                Name = "KHColumn", Size = UDim2.new(0.5, -4, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+                BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = o,
+            }, band)
+            create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8)}, c)
+            return c
+        end
+        colL, colR, hL, hR = mkCol(1), mkCol(2), 0, 0
+    end
+
+    for k = 1, #groups do
+        local g = groups[k]
+        if g.wide then
+            band = nil
+            order = order + 1
+            local card = newCard(frame, -1000 + order)
+            st.seen[card] = true
+            for i = 1, #g.items do g.items[i].Parent = card end
+        else
+            if anyWide then
+                if not band then openBand() end
+            else
+                colL, colR = st.colL, st.colR
+            end
+            local gh = 16
+            for i = 1, #g.items do gh = gh + KHS.itemH(g.items[i]) + 6 end
+            local toLeft = (hL <= hR)
+            if toLeft then hL = hL + gh + 8 else hR = hR + gh + 8 end
+            local card = newCard(toLeft and colL or colR, k)
+            for i = 1, #g.items do g.items[i].Parent = card end
+        end
+    end
+    for i = 1, #oldCards do oldCards[i]:Destroy() end
+    for i = 1, #oldBands do oldBands[i]:Destroy() end
+    if anyWide then KHS.DropCols(st) end
+    KHS.CardsRefresh(st)
+end
+
+-- Oculta las tarjetas que se quedaron sin widgets visibles (p. ej. al buscar).
+function KHS.CardsRefresh(only)
+    local function one(st)
+        if not st.active then return end
+        for i = 1, #st.cards do
+            local card = st.cards[i]
+            if card.Parent then
+                local any = false
+                local kids = card:GetChildren()
+                for j = 1, #kids do
+                    local k = kids[j]
+                    if k:IsA("GuiObject") and k.Visible then any = true break end
+                end
+                card.Visible = any
+            end
+        end
+    end
+    if only then return one(only) end
+    for i = 1, #KHS.ColList do one(KHS.ColList[i]) end
+end
+
+function KHS.isShown(inst)
+    local node, depth = inst, 0
+    while node and node ~= ContentContainer and depth < 12 do
+        if node:IsA("GuiObject") and not node.Visible then return false end
+        node = node.Parent
+        depth = depth + 1
+    end
+    return node == ContentContainer
+end
+
+-- ── Estilo de los botones de pestaña según el modo ──
+function KHS.StyleTab(reg)
+    local lbl, img = reg.Label, reg.Icon
+    if not lbl then return end
+    if KHS.IconMode then
+        if img then
+            lbl.Visible = false
+            img.AnchorPoint = Vector2.new(0.5, 0.5)
+            img.Position = UDim2.new(0.5, 0, 0.5, 0)
+            img.Size = UDim2.new(0, 20, 0, 20)
+        else
+            local nm = reg.Name or lbl.Text
+            lbl.Visible = true
+            lbl.Text = string.upper(string.sub(nm, 1, 1)) .. string.lower(string.sub(nm, 2, 2))
+            lbl.TextXAlignment = Enum.TextXAlignment.Center
+            lbl.Position = UDim2.new(0, 0, 0, 0)
+            lbl.Size = UDim2.new(1, 0, 1, 0)
+            lbl.TextSize = 13
+        end
+    else
+        lbl.Visible = true
+        lbl.Text = reg.Name or lbl.Text
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.TextSize = 15
+        lbl.Position = UDim2.new(0, reg.HasIcon and 34 or 12, 0, 0)
+        lbl.Size = UDim2.new(1, reg.HasIcon and -38 or -12, 1, 0)
+        if img then
+            img.AnchorPoint = Vector2.new(0, 0)
+            img.Position = UDim2.new(0, 8, 0.5, -9)
+            img.Size = UDim2.new(0, 18, 0, 18)
+        end
+    end
+end
+
+function KHS.StyleGroup(g)
+    if KHS.IconMode then
+        g.Label.Visible = false
+        g.Chevron.Size = UDim2.new(0, 10, 0, 10)
+        g.Chevron.Position = UDim2.new(1, -11, 1, -12)
+        g.Chevron.TextSize = 8
+        if g.Icon then
+            g.Icon.AnchorPoint = Vector2.new(0.5, 0.5)
+            g.Icon.Position = UDim2.new(0.5, 0, 0.5, 0)
+            g.Icon.Size = UDim2.new(0, 20, 0, 20)
+        else
+            g.Label.Visible = true
+            g.Label.Text = string.upper(string.sub(g.Name, 1, 1)) .. string.lower(string.sub(g.Name, 2, 2))
+            g.Label.TextXAlignment = Enum.TextXAlignment.Center
+            g.Label.Position = UDim2.new(0, 0, 0, 0)
+            g.Label.Size = UDim2.new(1, 0, 1, 0)
+            g.Label.TextSize = 13
+        end
+        g.Pad.PaddingLeft = UDim.new(0, 0)
+    else
+        g.Label.Visible = true
+        g.Label.Text = g.Name
+        g.Label.TextXAlignment = Enum.TextXAlignment.Left
+        g.Label.TextSize = 15
+        g.Label.Position = UDim2.new(0, g.HasIcon and 34 or 12, 0, 0)
+        g.Label.Size = UDim2.new(1, g.HasIcon and -54 or -32, 1, 0)
+        g.Chevron.Size = UDim2.new(0, 18, 0, 18)
+        g.Chevron.Position = UDim2.new(1, -22, 0.5, -9)
+        g.Chevron.TextSize = 11
+        if g.Icon then
+            g.Icon.AnchorPoint = Vector2.new(0, 0)
+            g.Icon.Position = UDim2.new(0, 8, 0.5, -9)
+            g.Icon.Size = UDim2.new(0, 18, 0, 18)
+        end
+        g.Pad.PaddingLeft = UDim.new(0, 10)
+    end
+end
+
+KHS.SearchConstraint = nil
+function KHS.ApplySidebar(instant)
+    local icon = KHS.IconMode
+    local sbW = icon and KHS.SB_ICON or KHS.SB_CLASSIC
+    local sbSize = UDim2.new(0, sbW, 1, -45)
+    local ccPos = UDim2.new(0, sbW - 2, 0, 43)
+    local ccSize = UDim2.new(1, -(sbW - 2), 1, -43)
+
+    TabsHeader.Visible = not icon
+    if icon then
+        -- En modo ícono el buscador sube a la barra superior (no cabe en la sidebar).
+        SearchBoxContainer.Parent = Topbar
+        SearchBoxContainer.Position = UDim2.new(0, 198, 0.5, -13)
+        SearchBoxContainer.Size = UDim2.new(1, -376, 0, 26)
+        if not KHS.SearchConstraint then
+            KHS.SearchConstraint = Instance.new("UISizeConstraint")
+            KHS.SearchConstraint.MinSize = Vector2.new(70, 0)
+            KHS.SearchConstraint.MaxSize = Vector2.new(170, 26)
+        end
+        KHS.SearchConstraint.Parent = SearchBoxContainer
+        SidebarTabsContainer.Position = UDim2.new(0, 0, 0, 8)
+        SidebarTabsContainer.Size = UDim2.new(1, 0, 1, -52)
+    else
+        SearchBoxContainer.Parent = Sidebar
+        SearchBoxContainer.Position = UDim2.new(0, 6, 0, 8)
+        SearchBoxContainer.Size = UDim2.new(1, -12, 0, 26)
+        if KHS.SearchConstraint then KHS.SearchConstraint.Parent = nil end
+        SidebarTabsContainer.Position = UDim2.new(0, 0, 0, 56)
+        SidebarTabsContainer.Size = UDim2.new(1, 0, 1, -100)
+    end
+
+    for i = 1, #KHS.TabRegs do KHS.StyleTab(KHS.TabRegs[i]) end
+    for i = 1, #KHS.Groups do KHS.StyleGroup(KHS.Groups[i]) end
+
+    local animate = (not instant) and MainFrame.Visible and not Config.UiLite and Config.MenuAnimEnabled ~= false
+    if animate then
+        local ti = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        TweenService:Create(Sidebar, ti, {Size = sbSize}):Play()
+        TweenService:Create(ContentContainer, ti, {Position = ccPos, Size = ccSize}):Play()
+    else
+        Sidebar.Size = sbSize
+        ContentContainer.Position = ccPos
+        ContentContainer.Size = ccSize
+    end
+end
+
+function KHS.SetInterface(mode, instant)
+    mode = (mode == "Double") and "Double" or "Classic"
+    local changed = (Config.InterfaceMode ~= mode)
+    Config.InterfaceMode = mode
+    KHS.IconMode = (mode == "Double")
+    if changed then saveConfig() end
+    KHS.ApplySidebar(instant)
+    -- Reacomodo: primero lo que se ve ahora, el resto de a uno por frame (sin tirón).
+    local later = {}
+    for i = #KHS.ColList, 1, -1 do
+        local st = KHS.ColList[i]
+        if not st.frame.Parent then
+            table.remove(KHS.ColList, i)
+        else
+            st.active = KHS.IconMode
+            if KHS.isShown(st.frame) then KHS.Reflow(st) else later[#later + 1] = st end
+        end
+    end
+    if #later > 0 then
+        task.spawn(function()
+            for i = 1, #later do
+                task.wait()
+                if later[i].frame.Parent then KHS.Reflow(later[i]) end
+            end
+        end)
+    end
+    for i = 1, #KHS.IfaceListeners do pcall(KHS.IfaceListeners[i]) end
+end
+
+-- El ancho de la ventana cambió (sliders Width/Height): reajusta los textos largos.
+do
+    local _ugs = updateGuiSize
+    local pending = false
+    updateGuiSize = function(...)
+        _ugs(...)
+        if pending then return end
+        pending = true
+        task.delay(0.2, function()
+            pending = false
+            for i = 1, #KHS.ColList do
+                local st = KHS.ColList[i]
+                if st.frame.Parent then KHS.RefitTexts(st.items) end
+            end
+        end)
+    end
+end
+
+KHS.ApplySidebar(true)
+
 local OpenCloseBtn = create("TextButton", {Name = "KillerHubToggle", Size = UDim2.new(0, 46, 0, 46), Position = UDim2.new(0, Config.BtnX or 15, 0, Config.BtnY or 100), BackgroundColor3 = CurrentTheme.BG_MAIN, Text = "", Active = true}, ScreenGui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, OpenCloseBtn)
 -- ✨ V5.4.6: el botón que abre/cierra el GUI ahora lleva el MISMO borde
@@ -1715,6 +2270,8 @@ local ShortcutIconPulses = {} -- id -> {inst = ImageLabel, scale = UIScale, spee
 KHS._iconAnimT = 0
 
 local function _borderAnimStep(dt)
+    -- ⚡ V6.0.0: repintado de tema repartido en frames (ver KHS.ThemeJobBody).
+    if KHS.TJob then KHS.ThemeStep() end
     -- 🆕 Customize UI: aplica como MÁXIMO un repintado del tema "Custom" por
     -- frame real, sin importar cuántos eventos de arrastre del color picker
     -- llegaron desde el último frame. Corre ANTES de los early-return de
@@ -1766,7 +2323,7 @@ local function _borderAnimStep(dt)
     -- cacheada en _innerCull.
     if menuLive and (Config.InnerBorders ~= false and not Config.UiLite) then
         KHS._innerAccum = KHS._innerAccum + dt
-        if KHS._innerAccum >= 0.033 then
+        if KHS._innerAccum >= 0.042 then
             KHS._innerAccum = 0
             for i = #InnerBorderGradients, 1, -1 do
                 local g = InnerBorderGradients[i]
@@ -2109,6 +2666,15 @@ end
 -- ============================================================================
 local function scrollWidgetIntoView(scrollFrame, widgetFrame, growBy)
     if not scrollFrame or not widgetFrame then return end
+    -- V6.0.1: en modo Double cada columna tiene su propio scroll; usamos el
+    -- ScrollingFrame más cercano al widget (en Classic es la misma pestaña).
+    do
+        local n = widgetFrame.Parent
+        while n and n ~= scrollFrame.Parent do
+            if n:IsA("ScrollingFrame") then scrollFrame = n break end
+            n = n.Parent
+        end
+    end
     if not scrollFrame:IsA("ScrollingFrame") then return end
     growBy = math.max(growBy or 0, 0)
     local viewportBottom = scrollFrame.AbsolutePosition.Y + scrollFrame.AbsoluteSize.Y
@@ -2122,7 +2688,9 @@ local function scrollWidgetIntoView(scrollFrame, widgetFrame, growBy)
     -- como si la animación "no hiciera nada" al abrirlo hasta abajo. Sumamos
     -- el crecimiento previsto (growBy) al CanvasSize antes de calcular el
     -- límite, para que el scroll SÍ pueda alcanzar el contenido nuevo.
-    local anticipatedCanvasH = scrollFrame.CanvasSize.Y.Offset + growBy
+    local baseCanvasH = (scrollFrame.AutomaticCanvasSize ~= Enum.AutomaticSize.None)
+        and scrollFrame.AbsoluteCanvasSize.Y or scrollFrame.CanvasSize.Y.Offset
+    local anticipatedCanvasH = baseCanvasH + growBy
     local maxCanvasY = math.max(0, anticipatedCanvasH - scrollFrame.AbsoluteSize.Y)
     local newY = math.min(scrollFrame.CanvasPosition.Y + overflow, maxCanvasY)
     if newY <= scrollFrame.CanvasPosition.Y then return end
@@ -2209,7 +2777,7 @@ do
     end
 
     local function getFont()
-        local ok, f = pcall(function() return Enum.Font[Config.SelectedFont or "GothamMedium"] end)
+        local ok, f = pcall(function() return KHS.FontOf(Config.SelectedFont or "GothamMedium") end)
         return (ok and f) or Enum.Font.GothamMedium
     end
 
@@ -2857,7 +3425,7 @@ function KillerHub:GetIcon(name) return resolveIcon(name) end
 function KillerHub:SetFont(fontName)
     Config.SelectedFont = fontName
     saveConfig()
-    local fontEnum = Enum.Font[fontName] or Enum.Font.GothamMedium
+    local fontEnum = KHS.FontOf(fontName) or Enum.Font.GothamMedium
     for _, v in ipairs(ScreenGui:GetDescendants()) do
         if (v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton")) and v.Font ~= fontEnum then
             v.Font = fontEnum
@@ -2961,6 +3529,15 @@ end
 -- BEFORE building its widgets. Saved user values always win over these.
 -- 🧼 Global sweep: guarantees no text anywhere renders with a glyph outline
 -- (the "double layer" that made colored text unreadable on some themes).
+-- 🆕 V6.0.0 · Cambiar la interfaz por código: "Classic" (la de siempre) o "Double"
+-- (sidebar solo con íconos + 2 columnas). También se elige en Settings ▸ General.
+function KillerHub:SetInterface(mode)
+    if KHS.SetInterface then KHS.SetInterface(mode) end
+end
+function KillerHub:GetInterface()
+    return Config.InterfaceMode == "Double" and "Double" or "Classic"
+end
+
 function KillerHub:StripTextOutlines()
     local roots = {ScreenGui, ShortcutScreenRef}
     for _, root in ipairs(roots) do
@@ -2986,114 +3563,354 @@ end
 -- Conecta el notificador diferido del cargador de fondos (KillerHub ya existe).
 BG_NOTIFY = function(t, x, d) pcall(function() KillerHub:Notify(t, x, d) end) end
 
+-- ============================================================================
+-- ⚡ V6.0.0 · MOTOR DE TEMAS INCREMENTAL  (adiós al lag al cambiar de color)
+-- ----------------------------------------------------------------------------
+-- ANTES: cada SetTheme (y con "Custom" se llamaba ~30 veces/seg mientras movías
+-- un color picker) recorría TODO el ScreenGui con GetDescendants(), leía 8
+-- atributos por instancia, creaba ~10 closures por instancia (pcall(function)),
+-- repintaba TODAS las pestañas (aunque estén ocultas) y además ejecutaba todos
+-- los callbacks y 2 recorridos más (fuente + contornos) en el MISMO frame. Con 6-7
+-- pestañas eso eran miles de operaciones juntas => tirón de varios frames.
+--
+-- AHORA:
+--   1. La ventana y la pestaña que estás viendo se repintan al instante.
+--   2. Todo lo demás (pestañas ocultas, callbacks de widgets, fuentes...) se
+--      repinta en segundo plano, repartido en varios frames con un presupuesto
+--      de ~2-4 ms por frame (coroutine + os.clock) => cero tirones.
+--   3. La lista de instancias con atributos de tema se cachea y solo se
+--      reconstruye si se agregó algo nuevo a la UI.
+--   4. Sin closures por instancia (pcall(fn, inst) en vez de pcall(function)).
+--   5. Solo se escribe una propiedad si el valor realmente cambia.
+--   6. En el arrastre de un color picker ("live") ya no se re-resuelve el fondo
+--      por red/disco ni se reconstruyen los degradados si el glow no cambió.
+-- ============================================================================
+KHS.ThemeVer = 0
+KHS.TC = {dirty = true, themed = {}, texts = {}, strokes = {}}
+KHS.TPainted = setmetatable({}, {__mode = "k"})
+KHS.TSkip = {
+    UIListLayout = true, UICorner = true, UIPadding = true, UIGradient = true, UIScale = true,
+    UISizeConstraint = true, UITextSizeConstraint = true, UIAspectRatioConstraint = true,
+    UIGridLayout = true, UIPageLayout = true, UITableLayout = true, UIFlexItem = true,
+    Folder = true, Sound = true, BindableEvent = true, BindableFunction = true,
+}
+KHS.TGui = {
+    Frame = true, TextLabel = true, TextButton = true, TextBox = true, ImageLabel = true,
+    ImageButton = true, ScrollingFrame = true, CanvasGroup = true, ViewportFrame = true,
+}
+KHS.TJob, KHS.TLive, KHS.TAgain, KHS.TPendLive = nil, true, false, nil
+KHS.TDeadline = 0
+KHS.TGlowDirty = false
+KHS.LastGlow = nil
+connect(ScreenGui.DescendantAdded, function() KHS.TC.dirty = true end)
+
+-- Resuelve una clave de tema tolerando temas que no definan GLOW.
+function KHS.ThemeColor(key)
+    local t = CurrentTheme
+    if key == "GLOW" then return t.GLOW or t.ACCENT end
+    return t[key]
+end
+
+-- Repinta UNA instancia según sus atributos Theme* (misma lógica de siempre,
+-- pero escribiendo solo si el color cambió).
+function KHS.PaintOne(v)
+    local t = CurrentTheme
+    local key = v:GetAttribute("ThemeText")
+    if key then
+        local c = KHS.ThemeColor(key)
+        if c and v.TextColor3 ~= c then v.TextColor3 = c end
+    end
+    if v:GetAttribute("ThemePlaceholder") then
+        if v.PlaceholderColor3 ~= t.TEXT_MUTED then v.PlaceholderColor3 = t.TEXT_MUTED end
+    end
+    key = v:GetAttribute("ThemeBG")
+    if key then
+        local c = KHS.ThemeColor(key)
+        if c and v.BackgroundColor3 ~= c then v.BackgroundColor3 = c end
+    end
+    key = v:GetAttribute("ThemeImage")
+    if key then
+        local c = KHS.ThemeColor(key)
+        if c and v.ImageColor3 ~= c then v.ImageColor3 = c end
+    end
+    key = v:GetAttribute("ThemeScrollBar")
+    if key then
+        local c = KHS.ThemeColor(key)
+        if c and v.ScrollBarImageColor3 ~= c then v.ScrollBarImageColor3 = c end
+    end
+    key = v:GetAttribute("ThemeStroke")
+    if key then
+        -- V5.5.1: los strokes con borde animado mantienen su base blanca (o el
+        -- color del tema si la animación está OFF); _paintInnerStroke decide.
+        if v:GetAttribute("AnimBorder") then
+            _paintInnerStroke(v)
+        else
+            local c = KHS.ThemeColor(key)
+            if c and v.Color ~= c then v.Color = c end
+        end
+        if v.ApplyStrokeMode ~= Enum.ApplyStrokeMode.Border then
+            v.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        end
+    end
+    local role = v:GetAttribute("ThemeRole")
+    if role == "BG_SECONDARY" then
+        if v.BackgroundColor3 ~= t.BG_SECONDARY then v.BackgroundColor3 = t.BG_SECONDARY end
+        local roleStroke = v:FindFirstChildWhichIsA("UIStroke")
+        if roleStroke then
+            if roleStroke:GetAttribute("AnimBorder") then
+                _paintInnerStroke(roleStroke)
+            elseif roleStroke.Color ~= t.BORDER then
+                roleStroke.Color = t.BORDER
+            end
+        end
+        if not v:GetAttribute("CustomColorLabel") then
+            local roleLabel = v:FindFirstChildWhichIsA("TextLabel")
+            if roleLabel and roleLabel.TextColor3 ~= t.ACCENT then roleLabel.TextColor3 = t.ACCENT end
+        end
+    elseif role == "TEXT_ACCENT" then
+        if v.TextColor3 ~= t.ACCENT then v.TextColor3 = t.ACCENT end
+    end
+end
+
+-- Repinta AL INSTANTE solo lo que el jugador está viendo (pestaña/página
+-- activa): se recorre el árbol saltando cualquier subárbol con Visible=false.
+function KHS.PaintVisible()
+    local root = KillerHub.CurrentTab and KillerHub.Frames[KillerHub.CurrentTab]
+    if not root then return end
+    local ver, skip, gui, painted, paint = KHS.ThemeVer, KHS.TSkip, KHS.TGui, KHS.TPainted, KHS.PaintOne
+    pcall(paint, root)
+    painted[root] = ver
+    local stack, sp = {root}, 1
+    while sp > 0 do
+        local node = stack[sp]
+        stack[sp] = nil
+        sp = sp - 1
+        local kids = node:GetChildren()
+        for i = 1, #kids do
+            local c = kids[i]
+            local cn = c.ClassName
+            if not skip[cn] then
+                pcall(paint, c)
+                painted[c] = ver
+                if gui[cn] and c.Visible then
+                    sp = sp + 1
+                    stack[sp] = c
+                end
+            end
+        end
+    end
+end
+
+-- Trabajo en segundo plano (coroutine con presupuesto de tiempo por frame).
+function KHS.ThemeJobBody(live)
+    local clock, yield = os.clock, coroutine.yield
+    local n = 0
+    local function slice()
+        n = n + 1
+        if n % 24 == 0 and clock() >= KHS.TDeadline then yield() end
+    end
+    local ver = KHS.ThemeVer
+    local TC, skip, painted, paint = KHS.TC, KHS.TSkip, KHS.TPainted, KHS.PaintOne
+
+    -- 1) Reconstruir el caché de instancias SOLO si la UI cambió.
+    if TC.dirty then
+        TC.dirty = false
+        local snap = ScreenGui:GetDescendants()
+        local themed, texts, strokes = {}, {}, {}
+        for i = 1, #snap do
+            local v = snap[i]
+            local cn = v.ClassName
+            if not skip[cn] then
+                if next(v:GetAttributes()) ~= nil then themed[#themed + 1] = v end
+                if cn == "TextLabel" or cn == "TextButton" or cn == "TextBox" then
+                    texts[#texts + 1] = v
+                elseif cn == "UIStroke" then
+                    strokes[#strokes + 1] = v
+                end
+            end
+            slice()
+        end
+        TC.themed, TC.texts, TC.strokes = themed, texts, strokes
+    end
+
+    -- 2) Repintar todo lo etiquetado (lo ya pintado al instante se salta).
+    local themed = TC.themed
+    for i = 1, #themed do
+        local v = themed[i]
+        if v.Parent and painted[v] ~= KHS.ThemeVer then
+            pcall(paint, v)
+            painted[v] = KHS.ThemeVer
+        end
+        slice()
+    end
+    if ShortcutScreenRef then
+        local sc = ShortcutScreenRef:GetDescendants()
+        for i = 1, #sc do
+            if not skip[sc[i].ClassName] then pcall(paint, sc[i]) end
+            slice()
+        end
+    end
+
+    -- 3) Degradados de bordes internos (solo si el glow cambió / cambio completo).
+    if KHS.TGlowDirty then
+        KHS.TGlowDirty = false
+        local seq = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
+        for i = #InnerBorderGradients, 1, -1 do
+            local g = InnerBorderGradients[i]
+            if g then
+                local stroke = g.Parent
+                if stroke then
+                    g.Color = seq
+                    if stroke:IsA("UIStroke") then _paintInnerStroke(stroke) end
+                else
+                    table.remove(InnerBorderGradients, i)
+                end
+            end
+            slice()
+        end
+    end
+
+    -- 4) Callbacks propios de cada widget (toggles ON, sliders, dropdowns...).
+    local cbs = KillerHub.TargetThemeElements
+    local i = 1
+    while i <= #cbs do
+        pcall(cbs[i])
+        i = i + 1
+        slice()
+    end
+
+    -- 5) Solo en un cambio de tema "completo": fuente + contornos de texto.
+    if not live then
+        local fontEnum = KHS.FontOf(Config.SelectedFont or "GothamMedium") or Enum.Font.GothamMedium
+        local texts = TC.texts
+        for j = 1, #texts do
+            local v = texts[j]
+            if v.Parent then
+                if v.Font ~= fontEnum then v.Font = fontEnum end
+                if v.TextStrokeTransparency ~= 1 then v.TextStrokeTransparency = 1 end
+            end
+            slice()
+        end
+        local strokes = TC.strokes
+        for j = 1, #strokes do
+            local v = strokes[j]
+            if v.Parent and v.ApplyStrokeMode ~= Enum.ApplyStrokeMode.Border then
+                v.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+            end
+            slice()
+        end
+        if KillerHub._RefreshShortcuts then pcall(KillerHub._RefreshShortcuts) end
+    end
+
+    -- ¿Pidieron otro cambio de tema mientras trabajábamos? Se repite desde cero.
+    if KHS.ThemeVer ~= ver then KHS.TAgain = true end
+end
+
+function KHS.ThemeKick(live)
+    if KHS.TJob then
+        -- Ya hay trabajo en curso: se anota para repetir al terminar (nunca se
+        -- reinicia a mitad, así un arrastre continuo no deja el repintado sin acabar).
+        KHS.TAgain = true
+        if KHS.TPendLive == nil then KHS.TPendLive = live else KHS.TPendLive = KHS.TPendLive and live end
+        return
+    end
+    KHS.TLive = live
+    KHS.TJob = coroutine.create(function() KHS.ThemeJobBody(live) end)
+end
+
+-- Se llama desde la Heartbeat compartida (_borderAnimStep).
+function KHS.ThemeStep()
+    local co = KHS.TJob
+    if not co then return end
+    if coroutine.status(co) ~= "suspended" then KHS.TJob = nil return end
+    KHS.TDeadline = os.clock() + (KHS.TLive and 0.002 or 0.004)
+    local ok, err = coroutine.resume(co)
+    if not ok then
+        KHS.TJob = nil
+        warn("[KillerHub] Error repintando el tema: " .. tostring(err))
+        return
+    end
+    if coroutine.status(co) == "dead" then
+        KHS.TJob = nil
+        if KHS.TAgain then
+            KHS.TAgain = false
+            local pend = KHS.TPendLive
+            KHS.TPendLive = nil
+            KHS.ThemeKick(pend == nil and true or pend)
+        end
+    end
+end
+
 function KillerHub:SetTheme(themeName, liveOnly)
     if not Themes[themeName] then return end
     CurrentTheme = Themes[themeName]
+    local t = CurrentTheme
     Config.SelectedTheme = themeName
     -- El preview del selector llama esta función muchas veces. No escribe el
     -- archivo hasta terminar el arrastre ni repite trabajo ajeno al color.
     if not liveOnly then saveConfig() end
-    
-    MainFrame.BackgroundColor3 = CurrentTheme.BG_MAIN
+
+    local glow = t.GLOW or t.ACCENT
+    local glowChanged = (glow ~= KHS.LastGlow) or not liveOnly
+    KHS.LastGlow = glow
+
+    MainFrame.BackgroundColor3 = t.BG_MAIN
     MainStroke.Color = STROKE_NEUTRAL
-    OuterGlow.Color = CurrentTheme.GLOW or CurrentTheme.ACCENT
-    BordeGradient.Color = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
-    OuterGlowGradient.Color = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
-    do
-        local seq = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
+    OuterGlow.Color = glow
+    FloatingStroke.Color = STROKE_NEUTRAL
+    if glowChanged then
+        local seq = _borderSeq(glow)
+        BordeGradient.Color = seq
+        OuterGlowGradient.Color = seq
+        if FloatingStrokeGradient then FloatingStrokeGradient.Color = seq end
+        KHS.TGlowDirty = true
+        -- Bordes internos que se están viendo: al instante (el resto, en segundo plano).
         for i = #InnerBorderGradients, 1, -1 do
             local g = InnerBorderGradients[i]
-            if g.Parent then
-                g.Color = seq
-                if g.Parent:IsA("UIStroke") then _paintInnerStroke(g.Parent) end
-            else table.remove(InnerBorderGradients, i) end
-        end
-    end
-    updateBackgroundImage()
-    Sidebar.BackgroundColor3 = CurrentTheme.BG_SIDEBAR
-    SidebarLine.BackgroundColor3 = CurrentTheme.BORDER
-    Title.TextColor3 = CurrentTheme.TEXT_WHITE
-    DecorLine.BackgroundColor3 = CurrentTheme.ACCENT
-    DecorGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, _blazeColor(CurrentTheme.ACCENT)),
-        ColorSequenceKeypoint.new(0.35, CurrentTheme.ACCENT),
-        ColorSequenceKeypoint.new(1, CurrentTheme.ACCENT)
-    })
-    PerformanceLabel.TextColor3 = CurrentTheme.TEXT_MUTED
-    SearchBoxContainer.BackgroundColor3 = CurrentTheme.BG_SECONDARY
-    if TabsHeaderLabel then TabsHeaderLabel.TextColor3 = CurrentTheme.TEXT_MUTED end
-    if TabsHeaderCount then TabsHeaderCount.TextColor3 = CurrentTheme.ACCENT end
-    if SidebarTabsContainer then SidebarTabsContainer.ScrollBarImageColor3 = CurrentTheme.ACCENT end
-    SearchInput.TextColor3 = CurrentTheme.TEXT_WHITE
-    SearchInput.PlaceholderColor3 = CurrentTheme.TEXT_MUTED
-    OpenCloseBtn.BackgroundColor3 = CurrentTheme.BG_MAIN
-    FloatingStroke.Color = STROKE_NEUTRAL
-    if FloatingStrokeGradient then
-        FloatingStrokeGradient.Color = _borderSeq(CurrentTheme.GLOW or CurrentTheme.ACCENT)
-    end
-    BtnIcon.ImageColor3 = menuVisible and CurrentTheme.ACCENT or CurrentTheme.TEXT_WHITE
-    
-    -- 🔄 Instant repaint: every instance tagged at creation time gets the new
-    -- theme color, so nothing stays painted with the previous palette.
-    -- Resuelve una clave de tema tolerando temas que no definan GLOW.
-    local function resolveThemeColor(key)
-        if key == "GLOW" then return CurrentTheme.GLOW or CurrentTheme.ACCENT end
-        return CurrentTheme[key]
-    end
-    local function repaintTagged(root)
-        for _, v in ipairs(root:GetDescendants()) do
-            local tt = v:GetAttribute("ThemeText")
-            if tt then pcall(function() v.TextColor3 = resolveThemeColor(tt) end) end
-            if v:GetAttribute("ThemePlaceholder") then pcall(function() v.PlaceholderColor3 = CurrentTheme.TEXT_MUTED end) end
-            local tb = v:GetAttribute("ThemeBG")
-            if tb then pcall(function() v.BackgroundColor3 = resolveThemeColor(tb) end) end
-            -- 🩹 FIX: ImageColor3 (iconos de settings, dropdowns, activadores
-            -- estaticos) nunca se repintaba porque nunca se etiquetaba.
-            local ti = v:GetAttribute("ThemeImage")
-            if ti then pcall(function() v.ImageColor3 = resolveThemeColor(ti) end) end
-            local tsb = v:GetAttribute("ThemeScrollBar")
-            if tsb then pcall(function() v.ScrollBarImageColor3 = resolveThemeColor(tsb) end) end
-            local ts = v:GetAttribute("ThemeStroke")
-            if ts then
-                pcall(function()
-                    -- V5.5.1: los strokes con borde animado mantienen su base
-                    -- blanca (o el color del tema si la animación está OFF);
-                    -- repintarlos aquí rompía el degradado o dejaba bordes blancos.
-                    if v:GetAttribute("AnimBorder") then
-                        _paintInnerStroke(v)
-                    else
-                        v.Color = resolveThemeColor(ts)
-                    end
-                    v.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-                end)
-            end
-            -- ThemeRole se resuelve en esta misma pasada: evita recorrer todo
-            -- ScreenGui una segunda vez durante cada muestra del preview.
-            local role = v:GetAttribute("ThemeRole")
-            if role == "BG_SECONDARY" then
-                v.BackgroundColor3 = CurrentTheme.BG_SECONDARY
-                local roleStroke = v:FindFirstChildWhichIsA("UIStroke")
-                if roleStroke then roleStroke.Color = CurrentTheme.BORDER end
-                local roleLabel = v:FindFirstChildWhichIsA("TextLabel")
-                if roleLabel and not v:GetAttribute("CustomColorLabel") then
-                    roleLabel.TextColor3 = CurrentTheme.ACCENT
+            if g and g.Parent then
+                local chain = _innerCull.cache[g]
+                if not chain then
+                    chain = _innerCull.chain(g)
+                    _innerCull.cache[g] = chain
                 end
-            elseif role == "TEXT_ACCENT" then
-                v.TextColor3 = CurrentTheme.ACCENT
+                if _innerCull.visible(chain) then
+                    g.Color = seq
+                    local stroke = g.Parent
+                    if stroke:IsA("UIStroke") then _paintInnerStroke(stroke) end
+                end
+            elseif g then
+                table.remove(InnerBorderGradients, i)
             end
         end
     end
-    repaintTagged(ScreenGui)
-    if ShortcutScreenRef then pcall(repaintTagged, ShortcutScreenRef) end
+    if liveOnly then
+        MainBackgroundScrim.BackgroundColor3 = t.BG_MAIN
+    else
+        updateBackgroundImage()
+    end
+    Sidebar.BackgroundColor3 = t.BG_SIDEBAR
+    SidebarLine.BackgroundColor3 = t.BORDER
+    Title.TextColor3 = t.TEXT_WHITE
+    DecorLine.BackgroundColor3 = t.ACCENT
+    DecorGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, _blazeColor(t.ACCENT)),
+        ColorSequenceKeypoint.new(0.35, t.ACCENT),
+        ColorSequenceKeypoint.new(1, t.ACCENT)
+    })
+    PerformanceLabel.TextColor3 = t.TEXT_MUTED
+    SearchBoxContainer.BackgroundColor3 = t.BG_SECONDARY
+    if TabsHeaderLabel then TabsHeaderLabel.TextColor3 = t.TEXT_MUTED end
+    if TabsHeaderCount then TabsHeaderCount.TextColor3 = t.ACCENT end
+    if SidebarTabsContainer then SidebarTabsContainer.ScrollBarImageColor3 = t.ACCENT end
+    SearchInput.TextColor3 = t.TEXT_WHITE
+    SearchInput.PlaceholderColor3 = t.TEXT_MUTED
+    OpenCloseBtn.BackgroundColor3 = t.BG_MAIN
+    BtnIcon.ImageColor3 = menuVisible and t.ACCENT or t.TEXT_WHITE
 
-    for _, refreshCallback in ipairs(self.TargetThemeElements) do
-        pcall(refreshCallback)
-    end
-    if not liveOnly then
-        self:SetFont(Config.SelectedFont or "GothamMedium")
-        if KillerHub._RefreshShortcuts then pcall(KillerHub._RefreshShortcuts) end
-        pcall(function() self:StripTextOutlines() end)
-    end
+    -- 🔄 Repintado: lo visible YA, lo demás repartido en varios frames.
+    KHS.ThemeVer = KHS.ThemeVer + 1
+    KHS.PaintVisible()
+    KHS.ThemeKick(liveOnly and true or false)
 end
 
 -- ============================================================================
@@ -3571,6 +4388,7 @@ function TabMethods:CreatePage(pageName, iconId)
     local pStroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, pageFrame)
     local pLayout = create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6)}, pageFrame)
     create("UIPadding", {PaddingTop = UDim.new(0, 8), PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8)}, pageFrame)
+    KHS.AttachCols(pageFrame, pLayout) -- V6.0.0: modo Double
     connect(pLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
         pageFrame.CanvasSize = UDim2.new(0, 0, 0, pLayout.AbsoluteContentSize.Y + 20)
     end)
@@ -3693,7 +4511,7 @@ function TabMethods:_AddPagePill(pageName, iconId, targetFrame)
     end)
 
     table.insert(KillerHub.TargetThemeElements, function()
-        label.Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamBold
+        label.Font = KHS.FontOf(Config.SelectedFont or "GothamMedium") or Enum.Font.GothamBold
         paintPill(self._pageRegistry[pageName], self._activePage == pageName, false)
     end)
 
@@ -3726,7 +4544,7 @@ function TabMethods:RegisterElement(inst, textLabel, tabName)
     -- grandes, especialmente en móvil). Como el widget recién creado ya nace con
     -- la fuente por defecto de Roblox, basta con aplicarle la fuente actual
     -- únicamente a él y a sus propios descendientes.
-    local fontEnum = Enum.Font[Config.SelectedFont] or Enum.Font.GothamMedium
+    local fontEnum = KHS.FontOf(Config.SelectedFont) or Enum.Font.GothamMedium
     task.defer(function()
         if not inst or not inst.Parent then return end
         if inst:IsA("TextLabel") or inst:IsA("TextBox") or inst:IsA("TextButton") then
@@ -3758,6 +4576,7 @@ function TabMethods:CreateParagraph(title, text)
     table.insert(KillerHub.TargetThemeElements, function()
         Tx.TextColor3 = CurrentTheme.TEXT_MUTED
     end)
+    KHS.Paras[Frame] = Tx -- V6.0.0: el modo Double ajusta su alto al texto
     self:RegisterElement(Frame, Tl, self.Frame.Name)
     
     local paraObj = {
@@ -3778,6 +4597,7 @@ function TabMethods:CreateSection(text)
     -- divisor horizontal con degradado de transparencia (sólido a la izquierda,
     -- se desvanece hacia la derecha) — igual al estilo de la imagen de referencia.
     local SectionFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1}, self.Frame)
+    KHS.Sections[SectionFrame] = true -- V6.0.0: cada sección abre una tarjeta en modo Double
 
     local Label = create("TextLabel", {Size = UDim2.new(1, 0, 0, 20), Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1, Text = string.upper(text), TextColor3 = CurrentTheme.ACCENT, Font = Enum.Font.GothamBold, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left}, SectionFrame)
     Label:SetAttribute("ThemeRole", "TEXT_ACCENT")
@@ -3823,6 +4643,7 @@ function TabMethods:CreateHint(text)
     table.insert(KillerHub.TargetThemeElements, function()
         Hint.TextColor3 = CurrentTheme.TEXT_MUTED
     end)
+    KHS.Hints[Hint] = true -- V6.0.0
     self:RegisterElement(Hint, Hint, self.Frame.Name)
     return {SetText = function(_, t) Hint.Text = t end}
 end
@@ -4550,7 +5371,7 @@ function TabMethods:CreateToggleColorPicker(flagToggle, flagColor, text, default
     local CLOSED_H, OPEN_H = 36, 226 -- +1 fila para el toggle de Modo RGB, respecto al panel anterior
 
     local MasterFrame = create("Frame", {Size = UDim2.new(1, 0, 0, CLOSED_H), BackgroundColor3 = CurrentTheme.BG_SECONDARY, BackgroundTransparency = 0.4, ClipsDescendants = true}, self.Frame)
-    MasterFrame:SetAttribute("ThemeRole", "BG_SECONDARY") MasterFrame:SetAttribute("CustomColorLabel", true)
+    MasterFrame:SetAttribute("ThemeRole", "BG_SECONDARY") MasterFrame:SetAttribute("CustomColorLabel", true) KHS.Wide[MasterFrame] = true -- V6.0.0: el picker necesita ancho completo en modo Double
     create("UICorner", {CornerRadius = UDim.new(0, 10)}, MasterFrame)
     local Stroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, MasterFrame)
 
@@ -4634,7 +5455,7 @@ function TabMethods:CreateColorPicker(flagColor, text, defaultColor, callback)
     local CLOSED_H, OPEN_H = 36, 226 -- +1 fila para el toggle de Modo RGB, respecto al panel anterior
 
     local MasterFrame = create("Frame", {Size = UDim2.new(1, 0, 0, CLOSED_H), BackgroundColor3 = CurrentTheme.BG_SECONDARY, BackgroundTransparency = 0.4, ClipsDescendants = true}, self.Frame)
-    MasterFrame:SetAttribute("ThemeRole", "BG_SECONDARY") MasterFrame:SetAttribute("CustomColorLabel", true)
+    MasterFrame:SetAttribute("ThemeRole", "BG_SECONDARY") MasterFrame:SetAttribute("CustomColorLabel", true) KHS.Wide[MasterFrame] = true -- V6.0.0: el picker necesita ancho completo en modo Double
     create("UICorner", {CornerRadius = UDim.new(0, 10)}, MasterFrame)
     local Stroke = create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, MasterFrame)
 
@@ -4935,6 +5756,7 @@ function KillerHub:CreateTab(name, iconId, opts)
     
     local layout = create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6)}, frame)
     create("UIPadding", {PaddingTop = UDim.new(0, 8), PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8)}, frame)
+    KHS.AttachCols(frame, layout) -- V6.0.0: modo Double (2 columnas) sin cambiar la API
     
     local sizeChangedConn = layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() 
         frame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 20) 
@@ -4946,7 +5768,7 @@ function KillerHub:CreateTab(name, iconId, opts)
     -- Resolvemos el icono: acepta nombre ("Gun"), ID plano ("14939026710") o rbxassetid completo
     local resolvedIcon = resolveIcon(iconId)
     local hasIcon = resolvedIcon ~= nil
-    local btnLabel = create("TextLabel", {Size = UDim2.new(1, hasIcon and -38 or -12, 1, 0), Position = UDim2.new(0, hasIcon and 34 or 12, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = CurrentTheme.TEXT_MUTED, Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamMedium, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left}, btn)
+    local btnLabel = create("TextLabel", {Size = UDim2.new(1, hasIcon and -38 or -12, 1, 0), Position = UDim2.new(0, hasIcon and 34 or 12, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = CurrentTheme.TEXT_MUTED, Font = KHS.FontOf(Config.SelectedFont or "GothamMedium") or Enum.Font.GothamMedium, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left}, btn)
     pcall(function() btnLabel.TextStrokeTransparency = 1 end)
 
     local iconImg
@@ -4960,26 +5782,36 @@ function KillerHub:CreateTab(name, iconId, opts)
     KillerHub.Frames[name] = frame KillerHub.Buttons[name] = btn
     -- Se guarda la referencia una sola vez (en vez de FindFirstChild en cada click de pestaña):
     -- más rápido y sin buscar en el árbol de instancias cada vez que se cambia de pestaña
-    KillerHub.TabRegistry[name] = {Frame = frame, Btn = btn, Label = btnLabel, Icon = iconImg, Line = line, LineGlow = lineGlow}
+    KillerHub.TabRegistry[name] = {Frame = frame, Btn = btn, Label = btnLabel, Icon = iconImg, Line = line, LineGlow = lineGlow, Name = name, HasIcon = hasIcon}
+    KHS.TabRegs[#KHS.TabRegs + 1] = KillerHub.TabRegistry[name]
+    if KHS.IconMode then KHS.StyleTab(KillerHub.TabRegistry[name]) end
 
     local function selectTab()
         for tName, reg in pairs(KillerHub.TabRegistry) do
             local isSel = (tName == name)
-            reg.Frame.Visible = isSel
-            reg.Label.TextColor3 = isSel and CurrentTheme.ACCENT or CurrentTheme.TEXT_MUTED
-            reg.Line.BackgroundTransparency = isSel and 0 or 1
-            if reg.LineGlow then reg.LineGlow.Transparency = isSel and 0.3 or 1 end
-            if reg.Icon then reg.Icon.ImageColor3 = isSel and CurrentTheme.ACCENT or CurrentTheme.TEXT_MUTED end
-            -- Fondo del botón: color del tema pero MUY transparente → distingue la pestaña
-            -- seleccionada sin verse pesado ni tapar el texto
-            if reg.Btn then
-                reg.Btn.BackgroundColor3 = CurrentTheme.ACCENT
-                TweenService:Create(reg.Btn, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                    BackgroundTransparency = isSel and 0.82 or 1
-                }):Play()
+            -- ⚡ V6.0.0: solo se toca (y se tweenea) lo que REALMENTE cambia de estado.
+            -- Antes, con N pestañas, cada click creaba N tweens y reescribía N botones.
+            if reg._sel ~= isSel then
+                reg._sel = isSel
+                reg.Frame.Visible = isSel
+                reg.Label.TextColor3 = isSel and CurrentTheme.ACCENT or CurrentTheme.TEXT_MUTED
+                reg.Line.BackgroundTransparency = isSel and 0 or 1
+                if reg.LineGlow then reg.LineGlow.Transparency = isSel and 0.3 or 1 end
+                if reg.Icon then reg.Icon.ImageColor3 = isSel and CurrentTheme.ACCENT or CurrentTheme.TEXT_MUTED end
+                -- Fondo del botón: color del tema pero MUY transparente → distingue la pestaña
+                -- seleccionada sin verse pesado ni tapar el texto
+                if reg.Btn then
+                    reg.Btn.BackgroundColor3 = CurrentTheme.ACCENT
+                    TweenService:Create(reg.Btn, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                        BackgroundTransparency = isSel and 0.82 or 1
+                    }):Play()
+                end
             end
         end
         KillerHub.CurrentTab = name
+        -- Si el repintado de tema sigue en curso en segundo plano, esta pestaña
+        -- (que acaba de aparecer) se pone al día al instante.
+        if KHS.TJob then KHS.PaintVisible() end
     end
     connect(btn.MouseButton1Click, function() if KillerHub.CurrentTab ~= name then selectTab() playUISound() end end)
     if isFirstTab or name == "Settings" then task.spawn(selectTab) end
@@ -4994,7 +5826,7 @@ function KillerHub:CreateTab(name, iconId, opts)
         btn.BackgroundTransparency = isSel and 0.82 or 1
         btnLabel.TextColor3 = isSel and CurrentTheme.ACCENT or CurrentTheme.TEXT_MUTED
         if iconImg then iconImg.ImageColor3 = isSel and CurrentTheme.ACCENT or CurrentTheme.TEXT_MUTED end
-        btnLabel.Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamBold
+        btnLabel.Font = KHS.FontOf(Config.SelectedFont or "GothamMedium") or Enum.Font.GothamBold
     end)
 
     -- Actualizar contador de pestañas (excluye Settings)
@@ -5065,7 +5897,7 @@ function KillerHub:CreateTabGroup(name, iconId)
         Size = UDim2.new(1, hasIcon and -54 or -32, 1, 0),
         Position = UDim2.new(0, hasIcon and 34 or 12, 0, 0),
         BackgroundTransparency = 1, Text = name, TextColor3 = CurrentTheme.TEXT_MUTED,
-        Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamMedium, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left
+        Font = KHS.FontOf(Config.SelectedFont or "GothamMedium") or Enum.Font.GothamMedium, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left
     }, btn)
     pcall(function() btnLabel.TextStrokeTransparency = 1 end)
 
@@ -5095,7 +5927,12 @@ function KillerHub:CreateTabGroup(name, iconId)
         LayoutOrder = 2, Visible = false, ClipsDescendants = true
     }, groupFrame)
     create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4)}, childrenContainer)
-    create("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2)}, childrenContainer)
+    local childPad = create("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2)}, childrenContainer)
+    do -- V6.0.0: el grupo también se restiliza en modo Double (solo ícono)
+        local gRec = {Label = btnLabel, Icon = iconImg, Chevron = chevron, Pad = childPad, HasIcon = hasIcon, Name = name}
+        KHS.Groups[#KHS.Groups + 1] = gRec
+        if KHS.IconMode then KHS.StyleGroup(gRec) end
+    end
 
     local open = false
     local function applyVisual()
@@ -5131,7 +5968,7 @@ function KillerHub:CreateTabGroup(name, iconId)
 
     table.insert(KillerHub.TargetThemeElements, function()
         applyVisual()
-        btnLabel.Font = Enum.Font[Config.SelectedFont or "GothamMedium"] or Enum.Font.GothamBold
+        btnLabel.Font = KHS.FontOf(Config.SelectedFont or "GothamMedium") or Enum.Font.GothamBold
     end)
 
     local group = {}
@@ -5158,7 +5995,7 @@ end
 -- 🆕 Filtro global en tiempo real, limitado a la pestaña activa para que la búsqueda
 -- sea instantánea incluso con cientos de widgets. Debounce con task.defer + task.wait.
 connect(SearchInput:GetPropertyChangedSignal("Text"), function()
-    if KHS.searchThread then task.cancel(KHS.searchThread) end
+    if KHS.searchThread then pcall(task.cancel, KHS.searchThread) end
     KHS.searchThread = task.defer(function()
         task.wait(0.08)
         local q = string.lower(SearchInput.Text or "")
@@ -5177,6 +6014,7 @@ connect(SearchInput:GetPropertyChangedSignal("Text"), function()
             processed = processed + 1
             if processed % 30 == 0 then task.wait() end
         end
+        if KHS.CardsRefresh then KHS.CardsRefresh() end -- V6.0.0: tarjetas sin resultados se ocultan
     end)
 end)
 
@@ -5272,7 +6110,7 @@ local function currentFontEnum()
     local name = Config.SelectedFont or "GothamMedium"
     if name ~= KHS._fontCacheName then
         KHS._fontCacheName = name
-        KHS._fontCacheEnum = Enum.Font[name] or Enum.Font.GothamMedium
+        KHS._fontCacheEnum = KHS.FontOf(name) or Enum.Font.GothamMedium
     end
     return KHS._fontCacheEnum
 end
@@ -7471,6 +8309,142 @@ SP.General:CreateHint("Color scheme of the whole hub. Pick \"Custom\" to design 
         Scroll.ScrollBarImageColor3 = CurrentTheme.ACCENT
     end)
 end)()
+
+-- ─────────────────── 🆕 V6.0.0 · CHANGE INTERFACE (Classic / Double) ───────────────────
+-- Dos tarjetitas con una vista previa dibujada de cada interfaz. Tocar una
+-- cambia la interfaz de todo el hub al instante y se guarda en el JSON.
+do
+    local Gen = SP.General
+    local card = create("Frame", {
+        Name = "ChangeInterface", Size = UDim2.new(1, 0, 0, 150),
+        BackgroundColor3 = CurrentTheme.BG_SECONDARY, BackgroundTransparency = 0.3, BorderSizePixel = 0,
+    }, Gen.Frame)
+    card:SetAttribute("ThemeRole", "BG_SECONDARY") card:SetAttribute("CustomColorLabel", true)
+    create("UICorner", {CornerRadius = UDim.new(0, 10)}, card)
+    create("UIStroke", {Thickness = 1, Color = CurrentTheme.BORDER}, card)
+
+    local title = create("TextLabel", {
+        Size = UDim2.new(1, -24, 0, 16), Position = UDim2.new(0, 12, 0, 8), BackgroundTransparency = 1,
+        Text = "Change interface", TextColor3 = CurrentTheme.TEXT_WHITE, Font = Enum.Font.GothamBold,
+        TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+    }, card)
+    local sub = create("TextLabel", {
+        Size = UDim2.new(1, -24, 0, 12), Position = UDim2.new(0, 12, 0, 25), BackgroundTransparency = 1,
+        Text = "Tap a preview to switch the whole hub.", TextColor3 = CurrentTheme.TEXT_MUTED,
+        Font = Enum.Font.GothamMedium, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
+    }, card)
+
+    local previews = {}
+    -- Colores iniciales "neutros" (no coinciden con ningún color de tema, así el
+    -- sistema de auto-repintado no los toca); el color real lo pone paint().
+    local N = Color3.fromRGB(33, 33, 37)
+
+    local function buildPreview(mode, label, xScale, xOff)
+        local btn = create("TextButton", {
+            Name = mode .. "Preview", Position = UDim2.new(xScale, xOff, 0, 44), Size = UDim2.new(0.5, -16, 0, 98),
+            BackgroundColor3 = N, Text = "", AutoButtonColor = false, ClipsDescendants = true,
+        }, card)
+        create("UICorner", {CornerRadius = UDim.new(0, 8)}, btn)
+        local stroke = create("UIStroke", {Thickness = 1, Color = N}, btn)
+        local win = create("Frame", {
+            Position = UDim2.new(0, 6, 0, 6), Size = UDim2.new(1, -12, 1, -30), BackgroundColor3 = N, BorderSizePixel = 0,
+        }, btn)
+        create("UICorner", {CornerRadius = UDim.new(0, 5)}, win)
+        local side = create("Frame", {BackgroundColor3 = N, BorderSizePixel = 0}, win)
+        create("UICorner", {CornerRadius = UDim.new(0, 5)}, side)
+        local p = {btn = btn, stroke = stroke, win = win, side = side, panels = {}, lines = {}, accents = {}}
+
+        if mode == "Classic" then
+            side.Size = UDim2.new(0.28, 0, 1, 0)
+            for i = 0, 3 do
+                local l = create("Frame", {
+                    Position = UDim2.new(0.14, 0, 0, 7 + i * 10), Size = UDim2.new(0.72, 0, 0, 4),
+                    BackgroundColor3 = N, BorderSizePixel = 0,
+                }, side)
+                create("UICorner", {CornerRadius = UDim.new(1, 0)}, l)
+                if i == 0 then p.accents[#p.accents + 1] = l else p.lines[#p.lines + 1] = l end
+            end
+            for i = 0, 2 do
+                local pn = create("Frame", {
+                    Position = UDim2.new(0.31, 0, 0, 4 + i * 19), Size = UDim2.new(0.67, 0, 0, 15),
+                    BackgroundColor3 = N, BorderSizePixel = 0,
+                }, win)
+                create("UICorner", {CornerRadius = UDim.new(0, 3)}, pn)
+                p.panels[#p.panels + 1] = pn
+            end
+        else
+            side.Size = UDim2.new(0.12, 0, 1, 0)
+            for i = 0, 3 do
+                local ic = create("Frame", {
+                    Position = UDim2.new(0.5, -3, 0, 6 + i * 11), Size = UDim2.new(0, 6, 0, 6),
+                    BackgroundColor3 = N, BorderSizePixel = 0,
+                }, side)
+                create("UICorner", {CornerRadius = UDim.new(0, 2)}, ic)
+                if i == 0 then p.accents[#p.accents + 1] = ic else p.lines[#p.lines + 1] = ic end
+            end
+            local cols = {
+                {x = 0.15, rows = {{4, 20}, {28, 30}}},
+                {x = 0.57, rows = {{4, 30}, {38, 20}}},
+            }
+            for _, col in ipairs(cols) do
+                for _, r in ipairs(col.rows) do
+                    local pn = create("Frame", {
+                        Position = UDim2.new(col.x, 0, 0, r[1]), Size = UDim2.new(0.41, 0, 0, r[2]),
+                        BackgroundColor3 = N, BorderSizePixel = 0,
+                    }, win)
+                    create("UICorner", {CornerRadius = UDim.new(0, 3)}, pn)
+                    p.panels[#p.panels + 1] = pn
+                end
+            end
+        end
+
+        p.cap = create("TextLabel", {
+            Position = UDim2.new(0, 0, 1, -22), Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1,
+            Text = label, TextColor3 = N, Font = Enum.Font.GothamBold, TextSize = 11,
+        }, btn)
+        p.dot = create("Frame", {
+            Position = UDim2.new(1, -16, 0, 10), Size = UDim2.new(0, 8, 0, 8), BackgroundColor3 = N,
+            BorderSizePixel = 0, ZIndex = 3,
+        }, btn)
+        create("UICorner", {CornerRadius = UDim.new(1, 0)}, p.dot)
+
+        connect(btn.MouseButton1Click, function()
+            if (Config.InterfaceMode or "Classic") ~= mode then
+                playUISound()
+                KHS.SetInterface(mode)
+            end
+        end)
+        previews[mode] = p
+    end
+    buildPreview("Classic", "Classic", 0, 10)
+    buildPreview("Double", "Double", 0.5, 6)
+
+    local function paint()
+        local t = CurrentTheme
+        local current = Config.InterfaceMode or "Classic"
+        title.TextColor3 = t.TEXT_WHITE
+        sub.TextColor3 = t.TEXT_MUTED
+        for mode, p in pairs(previews) do
+            local sel = (mode == current)
+            p.btn.BackgroundColor3 = t.BG_MAIN
+            p.stroke.Color = sel and t.ACCENT or t.BORDER
+            p.stroke.Thickness = sel and 2 or 1
+            p.win.BackgroundColor3 = t.BG_MAIN
+            p.side.BackgroundColor3 = t.BG_SIDEBAR
+            for _, f in ipairs(p.panels) do f.BackgroundColor3 = t.BORDER f.BackgroundTransparency = 0.25 end
+            for _, f in ipairs(p.lines) do f.BackgroundColor3 = t.TEXT_MUTED f.BackgroundTransparency = 0.45 end
+            for _, f in ipairs(p.accents) do f.BackgroundColor3 = t.ACCENT end
+            p.cap.TextColor3 = sel and t.ACCENT or t.TEXT_MUTED
+            p.dot.BackgroundColor3 = t.ACCENT
+            p.dot.Visible = sel
+        end
+    end
+    paint()
+    table.insert(KillerHub.TargetThemeElements, paint)
+    table.insert(KHS.IfaceListeners, paint)
+    Gen:RegisterElement(card, title, Gen.Frame.Name)
+end
+SP.General:CreateHint("Classic: names + 1 column. Double: icon-only sidebar + 2 columns of cards.")
 -- 🖼️ Fondo del tema actual (definido en ThemeBackgroundImages).
 SP.General:CreateToggle("BackgroundEnabled", "Background", function(v)
     Config.BackgroundEnabled = v
